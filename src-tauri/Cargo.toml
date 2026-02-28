@@ -1,12 +1,12 @@
 [package]
-name = "Typemore"
+name = "typemore"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
 
 [lib]
-name = "Typemore_lib"
+name = "typemore_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
