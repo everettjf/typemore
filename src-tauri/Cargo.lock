@@ -6,6 +6,7 @@ version = 4
 name = "TypeMore"
 version = "0.1.0"
 dependencies = [
+ "block",
  "core-foundation",
  "hound",
  "objc",
@@ -280,6 +281,12 @@ checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 dependencies = [
  "serde_core",
 ]
+
+[[package]]
+name = "block"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
 name = "block-buffer"

@@ -51,6 +51,7 @@ type GlobalShortcutPayload = {
 
 type HotkeySettings = {
   toggle: string;
+  fnEnabled: boolean;
 };
 
 type OverlayStatePayload = {
@@ -107,8 +108,9 @@ const I18N = {
     settingsLanguageTitle: "语言",
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
     settingsHotkeyTitle: "全局快捷键",
-    settingsHotkeyDesc: "单快捷键模式：第一次按开始录音，第二次按停止并自动识别与尝试输入。",
+    settingsHotkeyDesc: "单快捷键模式：第一次按开始录音，第二次按停止并自动识别与尝试输入。另支持 Fn 单键切换录音。",
     settingsHotkeyToggle: "语音输入快捷键",
+    settingsFnKeyToggle: "启用 Fn 单键切换录音（macOS）",
     settingsHotkeyTogglePlaceholder: "例如: CommandOrControl+Alt+Space",
     settingsHotkeySave: "保存快捷键",
     settingsHotkeyReset: "恢复默认",
@@ -190,8 +192,9 @@ const I18N = {
     settingsLanguageTitle: "Language",
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
     settingsHotkeyTitle: "Global Hotkey",
-    settingsHotkeyDesc: "Single-hotkey mode: first press starts recording, second press stops and auto-transcribes + tries typing.",
+    settingsHotkeyDesc: "Single-hotkey mode: first press starts recording, second press stops and auto-transcribes + tries typing. Fn key toggle is also supported.",
     settingsHotkeyToggle: "Dictation hotkey",
+    settingsFnKeyToggle: "Enable Fn one-key dictation toggle (macOS)",
     settingsHotkeyTogglePlaceholder: "e.g. CommandOrControl+Alt+Space",
     settingsHotkeySave: "Save hotkey",
     settingsHotkeyReset: "Reset default",
@@ -338,6 +341,7 @@ function MainApp() {
   });
   const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
   const [hotkeyToggle, setHotkeyToggle] = useState(DEFAULT_HOTKEY_TOGGLE);
+  const [fnKeyEnabled, setFnKeyEnabled] = useState(true);
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
@@ -446,6 +450,7 @@ function MainApp() {
   async function loadGlobalShortcuts() {
     const settings = await invoke<HotkeySettings>("get_global_shortcuts");
     setHotkeyToggle(settings.toggle);
+    setFnKeyEnabled(settings.fnEnabled);
   }
 
   async function refreshAccessibilityStatus() {
@@ -807,6 +812,7 @@ function MainApp() {
     try {
       const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle });
       setHotkeyToggle(next.toggle);
+      setFnKeyEnabled(next.fnEnabled);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -820,6 +826,20 @@ function MainApp() {
     try {
       const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle: DEFAULT_HOTKEY_TOGGLE });
       setHotkeyToggle(next.toggle);
+      setFnKeyEnabled(next.fnEnabled);
+    } catch (err) {
+      setTranscript(String(err));
+    } finally {
+      setSavingHotkeys(false);
+    }
+  }
+
+  async function onToggleFnKeyEnabled(nextEnabled: boolean) {
+    setSavingHotkeys(true);
+    try {
+      const next = await invoke<HotkeySettings>("set_fn_key_enabled", { enabled: nextEnabled });
+      setHotkeyToggle(next.toggle);
+      setFnKeyEnabled(next.fnEnabled);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -1187,6 +1207,16 @@ function MainApp() {
                           </Button>
                         </div>
                       </div>
+                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={fnKeyEnabled}
+                          disabled={savingHotkeys}
+                          onChange={(event) => void onToggleFnKeyEnabled(event.target.checked)}
+                          className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                        />
+                        <span>{t("settingsFnKeyToggle")}</span>
+                      </label>
                       <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
                       <div className="flex gap-2">
                         <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys}>

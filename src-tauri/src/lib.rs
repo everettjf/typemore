@@ -38,6 +38,67 @@ unsafe extern "C" {
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
 }
 
+#[cfg(target_os = "macos")]
+fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
+    use block::ConcreteBlock;
+    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let fn_is_down = Arc::new(AtomicBool::new(false));
+    let app_handle = app.clone();
+    let fn_is_down_in_handler = fn_is_down.clone();
+
+    let handler = ConcreteBlock::new(move |event: *mut Object| {
+        if event.is_null() {
+            return;
+        }
+
+        // NSEventModifierFlagFunction. On modern keyboards this also maps the Globe/Fn key.
+        const MODIFIER_FLAG_FUNCTION: u64 = 1 << 23;
+        let flags: u64 = unsafe { msg_send![event, modifierFlags] };
+        let is_down = (flags & MODIFIER_FLAG_FUNCTION) != 0;
+        let was_down = fn_is_down_in_handler.swap(is_down, Ordering::SeqCst);
+
+        if is_down && !was_down {
+            let fn_enabled = app_handle
+                .state::<AppState>()
+                .fn_key_enabled
+                .lock()
+                .map(|v| *v)
+                .unwrap_or(false);
+            if !fn_enabled {
+                return;
+            }
+            let _ = app_handle.emit(
+                HOTKEY_EVENT,
+                GlobalShortcutPayload {
+                    action: "toggle-dictation".to_string(),
+                    shortcut: "Fn".to_string(),
+                },
+            );
+        }
+    })
+    .copy();
+
+    // NSEventMaskFlagsChanged.
+    const EVENT_MASK_FLAGS_CHANGED: u64 = 1 << 12;
+    unsafe {
+        let ns_event_cls = class!(NSEvent);
+        let _: *mut Object = msg_send![
+            ns_event_cls,
+            addGlobalMonitorForEventsMatchingMask: EVENT_MASK_FLAGS_CHANGED
+            handler: &*handler
+        ];
+    }
+
+    // Keep monitor callback alive for app lifetime.
+    std::mem::forget(handler);
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RecordingItem {
@@ -113,6 +174,7 @@ impl Default for ModelInitStatus {
 struct AppState {
     init_status: Mutex<ModelInitStatus>,
     hotkeys: Mutex<HotkeyConfig>,
+    fn_key_enabled: Mutex<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -125,12 +187,15 @@ struct HotkeyConfig {
 #[serde(rename_all = "camelCase")]
 struct HotkeySettings {
     toggle: String,
+    fn_enabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedHotkeySettings {
     toggle: String,
+    #[serde(default = "default_fn_key_enabled")]
+    fn_enabled: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -147,6 +212,7 @@ impl Default for AppState {
             hotkeys: Mutex::new(
                 build_hotkey_config(HOTKEY_TOGGLE_DICTATION).expect("invalid default hotkeys"),
             ),
+            fn_key_enabled: Mutex::new(default_fn_key_enabled()),
         }
     }
 }
@@ -159,6 +225,10 @@ struct CachedTranscript {
 }
 
 type TranscriptCacheMap = HashMap<String, CachedTranscript>;
+
+const fn default_fn_key_enabled() -> bool {
+    true
+}
 
 fn build_hotkey_config(toggle: &str) -> Result<HotkeyConfig, String> {
     let toggle_shortcut: tauri_plugin_global_shortcut::Shortcut = toggle
@@ -1208,12 +1278,19 @@ fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Res
 #[tauri::command]
 fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
     let state = app.state::<AppState>();
-    let lock = state
+    let toggle = state
         .hotkeys
         .lock()
-        .map_err(|_| "failed to read hotkey settings".to_string())?;
+        .map_err(|_| "failed to read hotkey settings".to_string())
+        .map(|v| v.toggle.clone())?;
+    let fn_enabled = state
+        .fn_key_enabled
+        .lock()
+        .map_err(|_| "failed to read fn key settings".to_string())
+        .map(|v| *v)?;
     Ok(HotkeySettings {
-        toggle: lock.toggle.clone(),
+        toggle,
+        fn_enabled,
     })
 }
 
@@ -1221,16 +1298,55 @@ fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
 fn set_global_shortcuts(app: AppHandle, toggle: String) -> Result<HotkeySettings, String> {
     let new_config = build_hotkey_config(&toggle)?;
     let applied = apply_toggle_shortcut(&app, new_config)?;
+    let fn_enabled = app
+        .state::<AppState>()
+        .fn_key_enabled
+        .lock()
+        .map_err(|_| "failed to read fn key settings".to_string())
+        .map(|v| *v)?;
 
     save_persisted_hotkeys(
         &app,
         &PersistedHotkeySettings {
             toggle: applied.toggle.clone(),
+            fn_enabled,
         },
     )?;
 
     Ok(HotkeySettings {
         toggle: applied.toggle,
+        fn_enabled,
+    })
+}
+
+#[tauri::command]
+fn set_fn_key_enabled(app: AppHandle, enabled: bool) -> Result<HotkeySettings, String> {
+    let state = app.state::<AppState>();
+    {
+        let mut lock = state
+            .fn_key_enabled
+            .lock()
+            .map_err(|_| "failed to update fn key settings".to_string())?;
+        *lock = enabled;
+    }
+
+    let toggle = state
+        .hotkeys
+        .lock()
+        .map_err(|_| "failed to read hotkey settings".to_string())
+        .map(|v| v.toggle.clone())?;
+
+    save_persisted_hotkeys(
+        &app,
+        &PersistedHotkeySettings {
+            toggle: toggle.clone(),
+            fn_enabled: enabled,
+        },
+    )?;
+
+    Ok(HotkeySettings {
+        toggle,
+        fn_enabled: enabled,
     })
 }
 
@@ -1275,7 +1391,13 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let desired_cfg = match load_persisted_hotkeys(app.handle())? {
+            let persisted = load_persisted_hotkeys(app.handle())?;
+            let fn_enabled = persisted
+                .as_ref()
+                .map(|saved| saved.fn_enabled)
+                .unwrap_or_else(default_fn_key_enabled);
+
+            let desired_cfg = match persisted {
                 Some(saved) => match build_hotkey_config(&saved.toggle) {
                     Ok(cfg) => cfg,
                     Err(err) => {
@@ -1300,6 +1422,7 @@ pub fn run() {
                     app.handle(),
                     &PersistedHotkeySettings {
                         toggle: fallback.toggle,
+                        fn_enabled,
                     },
                 )?;
             } else if desired_cfg.toggle != HOTKEY_TOGGLE_DICTATION {
@@ -1307,12 +1430,24 @@ pub fn run() {
                     app.handle(),
                     &PersistedHotkeySettings {
                         toggle: desired_cfg.toggle,
+                        fn_enabled,
                     },
                 );
             }
 
             if let Ok(lock) = app.state::<AppState>().hotkeys.lock() {
                 eprintln!("[typemore] active hotkey: {}", lock.toggle);
+            }
+            if let Ok(mut lock) = app.state::<AppState>().fn_key_enabled.lock() {
+                *lock = fn_enabled;
+            }
+            eprintln!("[typemore] fn key enabled: {}", fn_enabled);
+
+            #[cfg(target_os = "macos")]
+            if let Err(err) = start_macos_fn_key_monitor(app.handle()) {
+                eprintln!("[typemore] failed to start fn monitor: {}", err);
+            } else {
+                eprintln!("[typemore] fn key monitor active");
             }
 
             if let Err(err) = ensure_overlay_window(app.handle()) {
@@ -1344,6 +1479,7 @@ pub fn run() {
             type_text_to_focused_app,
             get_global_shortcuts,
             set_global_shortcuts,
+            set_fn_key_enabled,
             set_overlay_state,
             hide_overlay
         ])
