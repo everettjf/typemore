@@ -1,4 +1,4 @@
-# Typemore
+# TypeMore
 
 <p align="center">
   Offline speech recognition desktop app built with Tauri + React + Rust.
@@ -30,11 +30,11 @@
 
 > Place your screenshot here: `docs/images/screenshot-main.png`
 
-![Typemore Screenshot](docs/images/screenshot-main.png)
+![TypeMore Screenshot](docs/images/screenshot-main.png)
 
 ## Overview
 
-Typemore is a desktop app focused on local/offline ASR (Automatic Speech Recognition).  
+TypeMore is a desktop app focused on local/offline ASR (Automatic Speech Recognition).  
 It is designed for fast speech capture, transcript generation, and recording management on macOS.
 
 - Local-first recognition workflow
@@ -151,4 +151,4 @@ License is currently TBD. Add a `LICENSE` file before public release.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=everettjf/Typemore&type=Date)](https://www.star-history.com/#everettjf/Typemore&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=everettjf/TypeMore&type=Date)](https://www.star-history.com/#everettjf/TypeMore&Date)

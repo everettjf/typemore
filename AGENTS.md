@@ -1,4 +1,4 @@
-# Typemore 仓库协作指南（AGENTS）
+# TypeMore 仓库协作指南（AGENTS）
 
 ## 1. 项目结构
 本仓库是 **Tauri 桌面应用**，前端为 **React + TypeScript**。

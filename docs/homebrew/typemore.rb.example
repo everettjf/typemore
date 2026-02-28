@@ -2,10 +2,10 @@ cask "typemore" do
   version "0.1.0"
   sha256 "REPLACE_WITH_REAL_SHA256"
 
-  url "https://github.com/everettjf/Typemore/releases/download/v#{version}/typemore-v#{version}-macos.zip"
-  name "Typemore"
+  url "https://github.com/everettjf/TypeMore/releases/download/v#{version}/typemore-v#{version}-macos.zip"
+  name "TypeMore"
   desc "Offline speech recognition desktop app built with Tauri"
-  homepage "https://github.com/everettjf/Typemore"
+  homepage "https://github.com/everettjf/TypeMore"
 
-  app "Typemore.app"
+  app "TypeMore.app"
 end

@@ -1,7 +1,7 @@
-# Typemore Icon Prompt
+# TypeMore Icon Prompt
 
 ## Prompt (for ChatGPT Image)
-Design a premium macOS app icon for an app named **Typemore**, an offline speech-to-text desktop tool.
+Design a premium macOS app icon for an app named **TypeMore**, an offline speech-to-text desktop tool.
 
 Visual concept:
 - Core metaphor: a **speech waveform transforming into text lines**.
@@ -40,4 +40,4 @@ Negative constraints:
 - No purple-dominant palette.
 
 ## Optional Variant Prompt (more bold)
-Create a bolder variant of the same Typemore icon where the waveform-to-text transition is more dynamic and diagonal, while preserving minimalism, macOS polish, and small-size readability.
+Create a bolder variant of the same TypeMore icon where the waveform-to-text transition is more dynamic and diagonal, while preserving minimalism, macOS polish, and small-size readability.

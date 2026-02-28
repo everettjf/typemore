@@ -182,7 +182,7 @@ fi
 if gh release view "$TAG" >/dev/null 2>&1; then
   gh release upload "$TAG" "$ARTIFACT" --clobber
 else
-  gh release create "$TAG" "$ARTIFACT" -t "$TAG" -n "Typemore $TAG"
+  gh release create "$TAG" "$ARTIFACT" -t "$TAG" -n "TypeMore $TAG"
 fi
 
 SHA256=$(shasum -a 256 "$ARTIFACT" | awk '{print $1}')

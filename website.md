@@ -1,6 +1,30 @@
-# Landing Page Prompt
+# Landing Page Prompt (TypeMore)
 
-你是资深产品设计师 + 前端工程师。请构建一个**简约、美观、专业**的 SaaS 落地页，支持**中文/英文一键切换**（i18n）。
+你是资深产品设计师 + 前端工程师。请为 **TypeMore** 构建一个**简约、美观、专业**的 SaaS 落地页，支持**中文/英文一键切换**（i18n）。
+
+## 产品信息（必须体现在页面中）
+- 产品名：TypeMore
+- 产品定位：离线优先（Local-first）的桌面语音转写应用
+- 平台：macOS（桌面端）
+- 核心价值：
+  - 本地识别，隐私友好
+  - 录音后自动转写，流程顺滑
+  - 录音历史管理（重命名/删除/重转写）
+  - 全局快捷键触发语音输入，提高效率
+- 技术背书：Tauri + React + Rust + sherpa-onnx
+
+## 品牌文案基调
+- 可信、克制、专业，避免夸张营销词。
+- 强调“隐私”“效率”“本地可控”。
+- 用词简洁，面向开发者/内容创作者/高频写作者。
+
+## 推荐核心文案（可润色，但含义保持）
+- 中文主标题：`离线语音转写，更快、更私密。`
+- 中文副标题：`TypeMore 在你的设备本地完成语音识别，支持快捷键一键录音与自动转写，让想法流畅落字。`
+- 英文主标题：`Offline Speech-to-Text, Fast and Private.`
+- 英文副标题：`TypeMore runs speech recognition locally on your device, with hotkey-triggered recording and automatic transcription for a frictionless writing flow.`
+- 主 CTA：`立即下载 / Download for macOS`
+- 次 CTA：`查看功能 / Explore Features`
 
 ## 目标
 - 为产品创建高转化首页，突出价值、可信度与行动引导（CTA）。
@@ -34,6 +58,11 @@
 5. Feature Section
 - 2-3 组功能介绍（标题、说明、示意图/占位图）。
 - 支持左右交错布局，提高可读性。
+- 功能内容需优先覆盖：
+  - 一键初始化模型（下载 + 准备）
+  - 录音停止后自动转写
+  - 历史录音重转写与文本编辑
+  - 快捷键触发输入到当前应用（如已授权）
 
 6. Pricing/CTA Block
 - 简洁套餐或行动召唤模块。
@@ -50,6 +79,7 @@
 - 至少包含 `zh-CN` 和 `en-US` 两套文案。
 - 语言切换后即时生效，不刷新页面。
 - 数字、日期、货币格式可按 locale 适配。
+- 产品名 `TypeMore` 不翻译。
 
 ## 交付要求
 - 输出可运行代码（组件化、结构清晰、可维护）。
@@ -71,4 +101,3 @@
 3. 完整页面代码（含 i18n 配置与字典）
 4. 如何运行与二次修改说明
 5. 可选优化建议（A/B 测试点）
-
