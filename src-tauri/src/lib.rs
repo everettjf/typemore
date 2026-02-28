@@ -22,8 +22,9 @@ const TEMP_DIR_NAME: &str = "tmp";
 const TRANSCRIPT_CACHE_FILE: &str = "transcript_cache.json";
 const INIT_EVENT: &str = "model-init-progress";
 const HOTKEY_EVENT: &str = "global-shortcut-triggered";
+const OVERLAY_EVENT: &str = "overlay-state";
 const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Alt+Space";
-const HOTKEY_INSERT_TEXT: &str = "CommandOrControl+Alt+Enter";
+const OVERLAY_WINDOW_LABEL: &str = "overlay";
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -112,27 +113,29 @@ struct AppState {
 #[derive(Debug, Clone)]
 struct HotkeyConfig {
     toggle: String,
-    insert: String,
     toggle_id: u32,
-    insert_id: u32,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HotkeySettings {
     toggle: String,
-    insert: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct OverlayStatePayload {
+    phase: String,
+    text: Option<String>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
             init_status: Mutex::new(ModelInitStatus::default()),
-            hotkeys: Mutex::new(build_hotkey_config(
-                HOTKEY_TOGGLE_DICTATION,
-                HOTKEY_INSERT_TEXT,
-            )
-            .expect("invalid default hotkeys")),
+            hotkeys: Mutex::new(
+                build_hotkey_config(HOTKEY_TOGGLE_DICTATION).expect("invalid default hotkeys"),
+            ),
         }
     }
 }
@@ -146,21 +149,13 @@ struct CachedTranscript {
 
 type TranscriptCacheMap = HashMap<String, CachedTranscript>;
 
-fn build_hotkey_config(toggle: &str, insert: &str) -> Result<HotkeyConfig, String> {
+fn build_hotkey_config(toggle: &str) -> Result<HotkeyConfig, String> {
     let toggle_shortcut: tauri_plugin_global_shortcut::Shortcut = toggle
         .parse()
         .map_err(|e| format!("invalid toggle shortcut: {e}"))?;
-    let insert_shortcut: tauri_plugin_global_shortcut::Shortcut = insert
-        .parse()
-        .map_err(|e| format!("invalid insert shortcut: {e}"))?;
-    if toggle_shortcut.id() == insert_shortcut.id() {
-        return Err("toggle and insert shortcuts cannot be the same".into());
-    }
     Ok(HotkeyConfig {
         toggle: toggle.to_string(),
-        insert: insert.to_string(),
         toggle_id: toggle_shortcut.id(),
-        insert_id: insert_shortcut.id(),
     })
 }
 
@@ -1032,6 +1027,70 @@ fn type_text_to_focused_app(text: String) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        return Ok(window);
+    }
+
+    let overlay = tauri::WebviewWindowBuilder::new(
+        app,
+        OVERLAY_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html#/overlay".into()),
+    )
+    .title("TypeMore Overlay")
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .focusable(false)
+    .focused(false)
+    .inner_size(560.0, 120.0)
+    .position(360.0, 36.0)
+    .shadow(false)
+    .visible(false)
+    .build()
+    .map_err(|e| format!("failed to create overlay window: {e}"))?;
+
+    #[cfg(target_os = "macos")]
+    {
+        use objc::{msg_send, sel, sel_impl};
+        let ns_window_ptr = overlay
+            .ns_window()
+            .map_err(|e| format!("failed to access overlay ns_window: {e}"))?;
+        let ns_window = ns_window_ptr as *mut objc::runtime::Object;
+        unsafe {
+            // Native level tuning on macOS to keep overlay window more reliably above regular windows.
+            let _: () = msg_send![ns_window, setLevel: 25_i64];
+            let behavior: u64 = 1 | (1 << 8);
+            let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+        }
+    }
+
+    Ok(overlay)
+}
+
+fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Result<(), String> {
+    let overlay = ensure_overlay_window(app)?;
+    if phase == "hidden" {
+        let _ = overlay.hide();
+    } else {
+        let _ = overlay.show();
+        let _ = overlay.set_always_on_top(true);
+        let _ = overlay.set_visible_on_all_workspaces(true);
+    }
+
+    app.emit(
+        OVERLAY_EVENT,
+        OverlayStatePayload {
+            phase: phase.to_string(),
+            text,
+        },
+    )
+    .map_err(|e| format!("failed to emit overlay state: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
     let state = app.state::<AppState>();
@@ -1041,13 +1100,12 @@ fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
         .map_err(|_| "failed to read hotkey settings".to_string())?;
     Ok(HotkeySettings {
         toggle: lock.toggle.clone(),
-        insert: lock.insert.clone(),
     })
 }
 
 #[tauri::command]
-fn set_global_shortcuts(app: AppHandle, toggle: String, insert: String) -> Result<HotkeySettings, String> {
-    let new_config = build_hotkey_config(&toggle, &insert)?;
+fn set_global_shortcuts(app: AppHandle, toggle: String) -> Result<HotkeySettings, String> {
+    let new_config = build_hotkey_config(&toggle)?;
     let state = app.state::<AppState>();
 
     let old_config = {
@@ -1064,22 +1122,9 @@ fn set_global_shortcuts(app: AppHandle, toggle: String, insert: String) -> Resul
             .unregister(old_config.toggle.as_str())
             .map_err(|e| format!("failed to unregister old toggle shortcut: {e}"))?;
     }
-    if manager.is_registered(old_config.insert.as_str()) {
-        manager
-            .unregister(old_config.insert.as_str())
-            .map_err(|e| format!("failed to unregister old insert shortcut: {e}"))?;
-    }
-
     if let Err(e) = manager.register(new_config.toggle.as_str()) {
         let _ = manager.register(old_config.toggle.as_str());
-        let _ = manager.register(old_config.insert.as_str());
         return Err(format!("failed to register toggle shortcut: {e}"));
-    }
-    if let Err(e) = manager.register(new_config.insert.as_str()) {
-        let _ = manager.unregister(new_config.toggle.as_str());
-        let _ = manager.register(old_config.toggle.as_str());
-        let _ = manager.register(old_config.insert.as_str());
-        return Err(format!("failed to register insert shortcut: {e}"));
     }
 
     {
@@ -1092,8 +1137,17 @@ fn set_global_shortcuts(app: AppHandle, toggle: String, insert: String) -> Resul
 
     Ok(HotkeySettings {
         toggle: new_config.toggle,
-        insert: new_config.insert,
     })
+}
+
+#[tauri::command]
+fn set_overlay_state(app: AppHandle, phase: String, text: Option<String>) -> Result<(), String> {
+    emit_overlay_state(&app, &phase, text)
+}
+
+#[tauri::command]
+fn hide_overlay(app: AppHandle) -> Result<(), String> {
+    emit_overlay_state(&app, "hidden", None)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1102,7 +1156,7 @@ pub fn run() {
         .manage(AppState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts([HOTKEY_TOGGLE_DICTATION, HOTKEY_INSERT_TEXT])
+                .with_shortcuts([HOTKEY_TOGGLE_DICTATION])
                 .expect("failed to configure global shortcuts")
                 .with_handler(|app, shortcut, event: ShortcutEvent| {
                     if event.state != ShortcutState::Pressed {
@@ -1114,8 +1168,6 @@ pub fn run() {
                     };
                     let action = if shortcut.id() == lock.toggle_id {
                         "toggle-dictation"
-                    } else if shortcut.id() == lock.insert_id {
-                        "insert-transcript"
                     } else {
                         return;
                     };
@@ -1142,11 +1194,7 @@ pub fn run() {
                     .register(lock.toggle.as_str())
                     .map_err(|e| format!("failed to register toggle shortcut: {e}"))?;
             }
-            if !manager.is_registered(lock.insert.as_str()) {
-                manager
-                    .register(lock.insert.as_str())
-                    .map_err(|e| format!("failed to register insert shortcut: {e}"))?;
-            }
+            let _ = ensure_overlay_window(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1165,7 +1213,9 @@ pub fn run() {
             open_accessibility_settings,
             type_text_to_focused_app,
             get_global_shortcuts,
-            set_global_shortcuts
+            set_global_shortcuts,
+            set_overlay_state,
+            hide_overlay
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -46,8 +46,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, 
 type Page = "home" | "history" | "dictionary";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
-type OverlayPhase = "hidden" | "listening" | "thinking" | "ready";
-type CaptureTarget = "toggle" | "insert" | null;
+type CaptureTarget = "toggle" | null;
 
 type AccessibilityStatus = {
   supported: boolean;
@@ -58,19 +57,22 @@ type AccessibilityStatus = {
 };
 
 type GlobalShortcutPayload = {
-  action: "toggle-dictation" | "insert-transcript";
+  action: "toggle-dictation";
   shortcut: string;
 };
 
 type HotkeySettings = {
   toggle: string;
-  insert: string;
+};
+
+type OverlayStatePayload = {
+  phase: "hidden" | "listening" | "thinking" | "ready";
+  text?: string | null;
 };
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
 const DEFAULT_HOTKEY_TOGGLE = "CommandOrControl+Alt+Space";
-const DEFAULT_HOTKEY_INSERT = "CommandOrControl+Alt+Enter";
 
 const I18N = {
   zh: {
@@ -117,11 +119,9 @@ const I18N = {
     settingsLanguageTitle: "语言",
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
     settingsHotkeyTitle: "全局快捷键",
-    settingsHotkeyDesc: "在任意应用内唤起语音输入与插入文本。",
-    settingsHotkeyToggle: "唤起/结束语音输入",
-    settingsHotkeyInsert: "将最新识别结果输入到当前输入框",
+    settingsHotkeyDesc: "单快捷键模式：第一次按开始录音，第二次按停止并自动识别与尝试输入。",
+    settingsHotkeyToggle: "语音输入快捷键",
     settingsHotkeyTogglePlaceholder: "例如: CommandOrControl+Alt+Space",
-    settingsHotkeyInsertPlaceholder: "例如: CommandOrControl+Alt+Enter",
     settingsHotkeySave: "保存快捷键",
     settingsHotkeyReset: "恢复默认",
     settingsHotkeyRecord: "录制",
@@ -137,9 +137,6 @@ const I18N = {
     accessRequest: "请求权限",
     accessOpenSettings: "打开系统设置",
     accessRefresh: "刷新状态",
-    overlayListening: "正在听...",
-    overlayThinking: "识别中...",
-    overlayReady: "就绪，可按快捷键输入",
     recordingPrefix: "录音",
     transcriptInitFailed: "初始化失败: {error}",
     transcriptListenFailed: "监听模型进度失败: {error}",
@@ -154,8 +151,11 @@ const I18N = {
     transcriptDeleteFailed: "删除失败: {error}",
     transcriptOpenTempDirOk: "已打开临时目录: {dir}",
     transcriptOpenTempDirFailed: "打开临时目录失败: {error}",
-    transcriptTypeOk: "已尝试输入最新识别结果。",
     transcriptTypeFailed: "输入到当前应用失败: {error}",
+    fallbackTitle: "未能自动输入",
+    fallbackDesc: "请点击复制后手动粘贴到目标输入框。",
+    fallbackCopy: "复制识别结果",
+    fallbackClose: "关闭",
   },
   en: {
     navHome: "Home",
@@ -200,17 +200,15 @@ const I18N = {
     settingsOpenTempDir: "Open Temporary Directory",
     settingsLanguageTitle: "Language",
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
-    settingsHotkeyTitle: "Global Hotkeys",
-    settingsHotkeyDesc: "Trigger dictation and insert text from any app.",
-    settingsHotkeyToggle: "Start/stop dictation",
-    settingsHotkeyInsert: "Insert latest transcript into focused input",
+    settingsHotkeyTitle: "Global Hotkey",
+    settingsHotkeyDesc: "Single-hotkey mode: first press starts recording, second press stops and auto-transcribes + tries typing.",
+    settingsHotkeyToggle: "Dictation hotkey",
     settingsHotkeyTogglePlaceholder: "e.g. CommandOrControl+Alt+Space",
-    settingsHotkeyInsertPlaceholder: "e.g. CommandOrControl+Alt+Enter",
-    settingsHotkeySave: "Save hotkeys",
+    settingsHotkeySave: "Save hotkey",
     settingsHotkeyReset: "Reset default",
     settingsHotkeyRecord: "Record",
     settingsHotkeyRecording: "Recording...",
-    settingsHotkeyPressHint: "Click Record, then press a key combo. Press Esc to cancel.",
+    settingsHotkeyPressHint: "Click Record then press combo. Press Esc to cancel.",
     languageModeLabel: "Interface language",
     langAuto: "Auto (System)",
     langZh: "Chinese",
@@ -221,9 +219,6 @@ const I18N = {
     accessRequest: "Request Permission",
     accessOpenSettings: "Open System Settings",
     accessRefresh: "Refresh",
-    overlayListening: "Listening...",
-    overlayThinking: "Thinking...",
-    overlayReady: "Ready. Press hotkey to insert",
     recordingPrefix: "recording",
     transcriptInitFailed: "Initialization failed: {error}",
     transcriptListenFailed: "Failed to listen model progress: {error}",
@@ -238,8 +233,11 @@ const I18N = {
     transcriptDeleteFailed: "Delete failed: {error}",
     transcriptOpenTempDirOk: "Opened temporary directory: {dir}",
     transcriptOpenTempDirFailed: "Failed to open temporary directory: {error}",
-    transcriptTypeOk: "Attempted to type latest transcript.",
     transcriptTypeFailed: "Failed to type into focused app: {error}",
+    fallbackTitle: "Auto typing failed",
+    fallbackDesc: "Copy the result and paste it to your target input manually.",
+    fallbackCopy: "Copy transcription",
+    fallbackClose: "Close",
   },
 } as const;
 
@@ -280,19 +278,60 @@ function localizedInitMessage(status: ModelInitStatus, uiLang: UiLang) {
     if (match) {
       return `Downloading model... ${match[1]}% (${match[2]})`;
     }
-    if (status.message.includes("skip") || status.message.includes("已下载")) {
-      return "Model archive already exists, skipping download";
-    }
     return `Downloading model... ${Math.max(0, Math.min(100, status.progress)).toFixed(1)}%`;
   }
 
   return status.message;
 }
 
-function App() {
+function OverlayWindowApp() {
+  const [phase, setPhase] = useState<OverlayStatePayload["phase"]>("hidden");
+  const [text, setText] = useState("");
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<OverlayStatePayload>("overlay-state", (event) => {
+      setPhase(event.payload.phase);
+      setText(event.payload.text ?? "");
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
+  if (phase === "hidden") {
+    return <div className="h-screen w-screen bg-transparent" />;
+  }
+
+  const title = phase === "listening" ? "正在听..." : phase === "thinking" ? "识别中..." : "就绪";
+  return (
+    <main className="h-screen w-screen bg-transparent p-4">
+      <div className="mx-auto mt-1 w-[520px] rounded-full border border-white/20 bg-black/90 px-8 py-5 text-white shadow-2xl">
+        <div className="flex items-center justify-between gap-4">
+          <div className="text-5xl font-semibold tracking-tight leading-none">{title}</div>
+          {phase === "listening" && (
+            <div className="flex items-center gap-2">
+              <span className="h-3 w-1 rounded-full bg-white animate-pulse" />
+              <span className="h-6 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
+              <span className="h-8 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
+              <span className="h-6 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
+              <span className="h-3 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
+            </div>
+          )}
+        </div>
+        {text && phase !== "listening" && <div className="mt-2 truncate text-sm text-white/80">{text}</div>}
+      </div>
+    </main>
+  );
+}
+
+function MainApp() {
   const [page, setPage] = useState<Page>("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
-
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
@@ -303,30 +342,24 @@ function App() {
   const [inputLevel, setInputLevel] = useState(0);
   const [levelHistory, setLevelHistory] = useState<number[]>(Array(36).fill(0));
   const [recordingSeconds, setRecordingSeconds] = useState(0);
-
   const [dictionaryWords, setDictionaryWords] = useState<string[]>([]);
   const [newWord, setNewWord] = useState("");
   const [langMode, setLangMode] = useState<LangMode>(() => {
     const raw = window.localStorage.getItem(LANG_MODE_STORAGE_KEY);
     return raw === "zh-CN" || raw === "en-US" || raw === "auto" ? raw : "auto";
   });
-
   const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
-  const [overlayPhase, setOverlayPhase] = useState<OverlayPhase>("hidden");
-  const [overlayText, setOverlayText] = useState("");
   const [hotkeyToggle, setHotkeyToggle] = useState(DEFAULT_HOTKEY_TOGGLE);
-  const [hotkeyInsert, setHotkeyInsert] = useState(DEFAULT_HOTKEY_INSERT);
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
+  const [fallbackText, setFallbackText] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
-
   const levelAudioCtxRef = useRef<AudioContext | null>(null);
   const levelAnalyserRef = useRef<AnalyserNode | null>(null);
   const levelRafRef = useRef<number | null>(null);
-  const overlayTimerRef = useRef<number | null>(null);
   const recordingByHotkeyRef = useRef(false);
 
   const selected = useMemo(
@@ -371,38 +404,26 @@ function App() {
   );
 
   function normalizeHotkeyLabel(value: string) {
-    return value
-      .replace(/CommandOrControl/g, "Cmd/Ctrl")
-      .replace(/Alt/g, "Option/Alt");
+    return value.replace(/CommandOrControl/g, "Cmd/Ctrl").replace(/Alt/g, "Option/Alt");
   }
 
   function buildShortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
-    const isModifierOnly =
-      event.key === "Shift" || event.key === "Control" || event.key === "Alt" || event.key === "Meta";
+    const isModifierOnly = ["Shift", "Control", "Alt", "Meta"].includes(event.key);
     if (isModifierOnly) {
       return null;
     }
-
     let key = "";
     if (event.key === " ") {
       key = "Space";
     } else if (event.key === "Enter") {
       key = "Enter";
-    } else if (event.key.length === 1 && /^[a-zA-Z]$/.test(event.key)) {
+    } else if (event.key.length === 1 && /^[a-zA-Z0-9]$/.test(event.key)) {
       key = event.key.toUpperCase();
-    } else if (event.key.length === 1 && /^[0-9]$/.test(event.key)) {
-      key = event.key;
     } else if (/^F[0-9]{1,2}$/.test(event.key)) {
       key = event.key.toUpperCase();
     } else {
-      const known = ["Tab", "Escape", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown"];
-      if (known.includes(event.key)) {
-        key = event.key;
-      } else {
-        return null;
-      }
+      return null;
     }
-
     const parts: string[] = [];
     if (event.metaKey || event.ctrlKey) {
       parts.push("CommandOrControl");
@@ -417,18 +438,19 @@ function App() {
     return parts.join("+");
   }
 
-  function showOverlay(phase: OverlayPhase, text = "", autoHideMs?: number) {
-    if (overlayTimerRef.current != null) {
-      window.clearTimeout(overlayTimerRef.current);
-      overlayTimerRef.current = null;
+  async function setOverlayState(phase: "listening" | "thinking" | "ready", text?: string) {
+    try {
+      await invoke("set_overlay_state", { phase, text: text ?? null });
+    } catch {
+      // ignore overlay failures in main flow
     }
-    setOverlayPhase(phase);
-    setOverlayText(text);
-    if (autoHideMs && autoHideMs > 0) {
-      overlayTimerRef.current = window.setTimeout(() => {
-        setOverlayPhase("hidden");
-        setOverlayText("");
-      }, autoHideMs);
+  }
+
+  async function hideOverlay() {
+    try {
+      await invoke("hide_overlay");
+    } catch {
+      // ignore
     }
   }
 
@@ -446,7 +468,6 @@ function App() {
   async function loadGlobalShortcuts() {
     const settings = await invoke<HotkeySettings>("get_global_shortcuts");
     setHotkeyToggle(settings.toggle);
-    setHotkeyInsert(settings.insert);
   }
 
   async function refreshAccessibilityStatus() {
@@ -500,11 +521,8 @@ function App() {
       });
 
     listen<GlobalShortcutPayload>("global-shortcut-triggered", (event) => {
-      const { action } = event.payload;
-      if (action === "toggle-dictation") {
+      if (event.payload.action === "toggle-dictation") {
         void onHotkeyToggleDictation();
-      } else if (action === "insert-transcript") {
-        void onHotkeyInsertTranscript();
       }
     })
       .then((fn) => {
@@ -521,9 +539,6 @@ function App() {
       if (unlistenHotkey) {
         unlistenHotkey();
       }
-      if (overlayTimerRef.current != null) {
-        window.clearTimeout(overlayTimerRef.current);
-      }
     };
   }, [t]);
 
@@ -532,9 +547,7 @@ function App() {
       setRecordingSeconds(0);
       return;
     }
-    const timer = window.setInterval(() => {
-      setRecordingSeconds((prev) => prev + 1);
-    }, 1000);
+    const timer = window.setInterval(() => setRecordingSeconds((prev) => prev + 1), 1000);
     return () => window.clearInterval(timer);
   }, [isRecording]);
 
@@ -555,29 +568,20 @@ function App() {
     if (!captureTarget) {
       return;
     }
-
     const onKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
-
       if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
         setCaptureTarget(null);
         return;
       }
-
       const shortcut = buildShortcutFromKeyboardEvent(event);
       if (!shortcut) {
         return;
       }
-
-      if (captureTarget === "toggle") {
-        setHotkeyToggle(shortcut);
-      } else {
-        setHotkeyInsert(shortcut);
-      }
+      setHotkeyToggle(shortcut);
       setCaptureTarget(null);
     };
-
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [captureTarget]);
@@ -609,14 +613,12 @@ function App() {
 
     const data = new Uint8Array(analyser.fftSize);
     let frame = 0;
-
     const tick = () => {
       const current = levelAnalyserRef.current;
       if (!current) {
         return;
       }
       current.getByteTimeDomainData(data);
-
       let sum = 0;
       for (let i = 0; i < data.length; i += 1) {
         const centered = (data[i] - 128) / 128;
@@ -625,15 +627,12 @@ function App() {
       const rms = Math.sqrt(sum / data.length);
       const normalized = Math.min(1, rms * 5.5);
       setInputLevel(normalized);
-
       frame += 1;
       if (frame % 2 === 0) {
         setLevelHistory((prev) => [...prev.slice(1), normalized]);
       }
-
       levelRafRef.current = requestAnimationFrame(tick);
     };
-
     levelRafRef.current = requestAnimationFrame(tick);
   }
 
@@ -649,11 +648,20 @@ function App() {
     }
   }
 
+  async function tryTypeToFocusedApp(text: string) {
+    try {
+      await invoke("type_text_to_focused_app", { text });
+      return true;
+    } catch (err) {
+      setTranscript(t("transcriptTypeFailed", { error: String(err) }));
+      return false;
+    }
+  }
+
   async function startRecording() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
     chunksRef.current = [];
-
     startLevelMonitor(stream);
 
     const recorder = new MediaRecorder(stream);
@@ -677,23 +685,27 @@ function App() {
           wavData,
         };
 
-        const result = await invoke<SaveAndTranscribeResult>("save_recording_and_transcribe", {
-          payload,
-        });
-
+        const result = await invoke<SaveAndTranscribeResult>("save_recording_and_transcribe", { payload });
         setRecordings((prev) => [result.recording, ...prev]);
         setSelectedId(result.recording.id);
         setTranscript(result.text || "");
 
         if (recordingByHotkeyRef.current) {
-          showOverlay("ready", result.text || t("overlayReady"), 2400);
+          const ok = await tryTypeToFocusedApp(result.text || "");
+          if (!ok && result.text) {
+            setFallbackText(result.text);
+          }
+          await setOverlayState("ready", ok ? "" : result.text);
+          window.setTimeout(() => {
+            void hideOverlay();
+          }, 1800);
         } else {
           setPage("history");
         }
       } catch (err) {
         setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
         if (recordingByHotkeyRef.current) {
-          showOverlay("ready", t("transcriptRecordingFailed", { error: String(err) }), 2400);
+          await setOverlayState("ready", t("transcriptRecordingFailed", { error: String(err) }));
         }
       } finally {
         recordingByHotkeyRef.current = false;
@@ -735,41 +747,27 @@ function App() {
 
   async function onHotkeyToggleDictation() {
     if (isRecording) {
-      showOverlay("thinking", t("overlayThinking"));
+      await setOverlayState("thinking");
       stopRecording();
       return;
     }
     if (!modelReady) {
       setTranscript(t("transcriptNeedInit"));
-      showOverlay("ready", t("transcriptNeedInit"), 2000);
+      await setOverlayState("ready", t("transcriptNeedInit"));
+      window.setTimeout(() => {
+        void hideOverlay();
+      }, 1600);
       return;
     }
     try {
       recordingByHotkeyRef.current = true;
       await startRecording();
-      showOverlay("listening", t("overlayListening"));
+      await setOverlayState("listening");
     } catch (err) {
       setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
-      showOverlay("ready", t("transcriptRecordingFailed", { error: String(err) }), 2400);
+      await setOverlayState("ready", t("transcriptRecordingFailed", { error: String(err) }));
       stopLevelMonitor();
     }
-  }
-
-  async function onTypeTranscriptToFocusedApp() {
-    if (!transcript.trim()) {
-      return;
-    }
-    try {
-      await invoke("type_text_to_focused_app", { text: transcript });
-      setTranscript(t("transcriptTypeOk"));
-    } catch (err) {
-      setTranscript(t("transcriptTypeFailed", { error: String(err) }));
-    }
-  }
-
-  async function onHotkeyInsertTranscript() {
-    await onTypeTranscriptToFocusedApp();
-    showOverlay("ready", t("overlayReady"), 1800);
   }
 
   async function onRetranscribeSelected() {
@@ -779,10 +777,7 @@ function App() {
     }
     setIsBusy(true);
     try {
-      const text = await invoke<string>("transcribe_recording", {
-        id: selected.id,
-        force: true,
-      });
+      const text = await invoke<string>("transcribe_recording", { id: selected.id, force: true });
       setTranscript(text || "");
     } catch (err) {
       setTranscript(t("transcriptRetryFailed", { error: String(err) }));
@@ -811,10 +806,7 @@ function App() {
       return;
     }
     try {
-      const renamed = await invoke<RecordingItem>("rename_recording", {
-        id: recording.id,
-        newName: name,
-      });
+      const renamed = await invoke<RecordingItem>("rename_recording", { id: recording.id, newName: name });
       setRecordings((prev) => prev.map((item) => (item.id === recording.id ? renamed : item)));
       if (selectedId === recording.id) {
         setSelectedId(renamed.id);
@@ -868,15 +860,13 @@ function App() {
 
   async function onSaveHotkeys() {
     const toggle = hotkeyToggle.trim();
-    const insert = hotkeyInsert.trim();
-    if (!toggle || !insert) {
+    if (!toggle) {
       return;
     }
     setSavingHotkeys(true);
     try {
-      const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle, insert });
+      const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle });
       setHotkeyToggle(next.toggle);
-      setHotkeyInsert(next.insert);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -886,15 +876,10 @@ function App() {
 
   async function onResetHotkeys() {
     setHotkeyToggle(DEFAULT_HOTKEY_TOGGLE);
-    setHotkeyInsert(DEFAULT_HOTKEY_INSERT);
     setSavingHotkeys(true);
     try {
-      const next = await invoke<HotkeySettings>("set_global_shortcuts", {
-        toggle: DEFAULT_HOTKEY_TOGGLE,
-        insert: DEFAULT_HOTKEY_INSERT,
-      });
+      const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle: DEFAULT_HOTKEY_TOGGLE });
       setHotkeyToggle(next.toggle);
-      setHotkeyInsert(next.insert);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -908,11 +893,9 @@ function App() {
       return;
     }
     const exists = dictionaryWords.some((item) => item.toLowerCase() === word.toLowerCase());
-    if (exists) {
-      setNewWord("");
-      return;
+    if (!exists) {
+      setDictionaryWords((prev) => [word, ...prev]);
     }
-    setDictionaryWords((prev) => [word, ...prev]);
     setNewWord("");
   }
 
@@ -994,16 +977,11 @@ function App() {
                         {accessibility.trusted ? <ShieldCheck size={18} className="text-emerald-600" /> : <ShieldAlert size={18} className="text-amber-600" />}
                         {t("accessTitle")}
                       </div>
-                      <p className="mt-1 text-sm text-slate-600">
-                        {accessibility.trusted ? t("accessGranted") : t("accessNeed")}
-                      </p>
+                      <p className="mt-1 text-sm text-slate-600">{accessibility.trusted ? t("accessGranted") : t("accessNeed")}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        AX: {String(accessibility.axTrusted ?? false)} | TCC:{" "}
-                        {accessibility.tccAllowed == null ? "unknown" : String(accessibility.tccAllowed)}
+                        AX: {String(accessibility.axTrusted ?? false)} | TCC: {accessibility.tccAllowed == null ? "unknown" : String(accessibility.tccAllowed)}
                       </p>
-                      {accessibility.runtimeHint && (
-                        <p className="mt-1 text-xs text-amber-600">{accessibility.runtimeHint}</p>
-                      )}
+                      {accessibility.runtimeHint && <p className="mt-1 text-xs text-amber-600">{accessibility.runtimeHint}</p>}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button variant="outline" onClick={onRequestAccessibilityPermission}>{t("accessRequest")}</Button>
@@ -1027,12 +1005,7 @@ function App() {
                     disabled={isBusy || initStatus.running}
                   >
                     <Mic size={16} />
-                    <span
-                      className={cn(
-                        "inline-block h-2 w-2 rounded-full bg-white/90",
-                        isRecording ? "animate-pulse" : "opacity-70"
-                      )}
-                    />
+                    <span className={cn("inline-block h-2 w-2 rounded-full bg-white/90", isRecording ? "animate-pulse" : "opacity-70")} />
                     {isRecording ? t("stopRecording") : t("startRecording")}
                   </Button>
                   <Button
@@ -1055,9 +1028,8 @@ function App() {
                   {initStatus.error && <div className="text-xs text-red-600">{initStatus.error}</div>}
                 </div>
 
-                <div className="mt-4 grid gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600 md:grid-cols-2">
+                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600">
                   <div>{t("settingsHotkeyToggle")}: <span className="font-semibold text-slate-800">{hotkeyToggle}</span></div>
-                  <div>{t("settingsHotkeyInsert")}: <span className="font-semibold text-slate-800">{hotkeyInsert}</span></div>
                 </div>
               </Card>
 
@@ -1108,24 +1080,15 @@ function App() {
                         <div
                           className={cn(
                             "rounded-xl border px-3 py-2",
-                            selectedId === item.id
-                              ? "border-sky-300 bg-sky-50"
-                              : "border-slate-200 bg-white hover:bg-slate-50"
+                            selectedId === item.id ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"
                           )}
                         >
-                          <button
-                            type="button"
-                            className="w-full text-left"
-                            onClick={() => setSelectedId(item.id)}
-                            title={item.filePath}
-                          >
+                          <button type="button" className="w-full text-left" onClick={() => setSelectedId(item.id)} title={item.filePath}>
                             <div className="text-sm font-medium text-slate-800">{item.name}</div>
                             <div className="mt-1 text-xs text-slate-500">{formatListTime(item.createdAtMs)}</div>
                           </button>
                           <div className="mt-2 flex items-center gap-2">
-                            <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => onRename(item)}>
-                              {t("rename")}
-                            </Button>
+                            <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => onRename(item)}>{t("rename")}</Button>
                             <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => onDelete(item)}>
                               <Trash2 size={13} />
                               {t("delete")}
@@ -1141,9 +1104,7 @@ function App() {
               <Card className="flex min-h-0 flex-col p-3">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div className="text-sm text-slate-500">
-                    {selected
-                      ? t("currentRecording", { time: formatCurrentRecordingTime(selected.createdAtMs) })
-                      : t("noSelectedRecording")}
+                    {selected ? t("currentRecording", { time: formatCurrentRecordingTime(selected.createdAtMs) }) : t("noSelectedRecording")}
                   </div>
                   <div className="inline-flex items-center gap-2">
                     <Button
@@ -1167,11 +1128,7 @@ function App() {
                   </div>
                 </div>
 
-                <Textarea
-                  value={transcript}
-                  onChange={(event) => setTranscript(event.target.value)}
-                  placeholder={t("transcriptPlaceholder")}
-                />
+                <Textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder={t("transcriptPlaceholder")} />
               </Card>
             </div>
           )}
@@ -1180,9 +1137,7 @@ function App() {
             <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_auto_1fr]">
               <header className="flex items-center justify-between">
                 <h2 className="text-3xl font-semibold tracking-tight">{t("dictionaryTitle")}</h2>
-                <Badge className="bg-slate-100 text-slate-700 border-slate-200">
-                  {t("dictionaryWords", { count: dictionaryWords.length })}
-                </Badge>
+                <Badge className="bg-slate-100 text-slate-700 border-slate-200">{t("dictionaryWords", { count: dictionaryWords.length })}</Badge>
               </header>
 
               <Card className="p-3">
@@ -1191,9 +1146,7 @@ function App() {
                     value={newWord}
                     onChange={(event) => setNewWord(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        addDictionaryWord();
-                      }
+                      if (event.key === "Enter") addDictionaryWord();
                     }}
                     placeholder={t("dictionaryPlaceholder")}
                     className="h-10 min-w-[220px] flex-1 rounded-md border border-slate-300 px-3 text-sm outline-none ring-sky-300 transition focus:ring"
@@ -1209,10 +1162,7 @@ function App() {
                 <ScrollArea className="h-full" viewportClassName="h-full p-3">
                   <div className="flex flex-wrap gap-2">
                     {dictionaryWords.map((word) => (
-                      <div
-                        key={word}
-                        className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm"
-                      >
+                      <div key={word} className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm">
                         <span>{word}</span>
                         <button
                           type="button"
@@ -1225,9 +1175,7 @@ function App() {
                       </div>
                     ))}
                     {dictionaryWords.length === 0 && (
-                      <div className="w-full rounded-xl border border-dashed border-slate-300 px-3 py-10 text-center text-sm text-slate-500">
-                        {t("dictionaryEmpty")}
-                      </div>
+                      <div className="w-full rounded-xl border border-dashed border-slate-300 px-3 py-10 text-center text-sm text-slate-500">{t("dictionaryEmpty")}</div>
                     )}
                   </div>
                 </ScrollArea>
@@ -1242,9 +1190,7 @@ function App() {
           <div className="grid h-[min(680px,90vh)] w-[min(980px,95vw)] grid-cols-[220px_1fr] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <aside className="border-r border-slate-200 bg-slate-50/80 p-3">
               <div className="mb-3 px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{t("settingsTitle")}</div>
-              <div className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-sm">
-                {t("settingsSectionGeneral")}
-              </div>
+              <div className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-sm">{t("settingsSectionGeneral")}</div>
             </aside>
 
             <section className="flex min-h-0 flex-col overflow-hidden">
@@ -1257,88 +1203,62 @@ function App() {
 
               <div className="min-h-0 flex-1 overflow-y-auto p-6">
                 <div className="space-y-4 pb-2">
-                <Card className="p-4">
-                  <div className="text-lg font-semibold text-slate-900">{t("settingsLanguageTitle")}</div>
-                  <p className="mt-1 text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
-                  <div className="mt-4 max-w-xs">
-                    <label className="mb-1 block text-sm text-slate-700">{t("languageModeLabel")}</label>
-                    <select
-                      value={langMode}
-                      onChange={(event) => setLangMode(event.target.value as LangMode)}
-                      className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                    >
-                      <option value="auto">{t("langAuto")}</option>
-                      <option value="zh-CN">{t("langZh")}</option>
-                      <option value="en-US">{t("langEn")}</option>
-                    </select>
-                  </div>
-                </Card>
+                  <Card className="p-4">
+                    <div className="text-lg font-semibold text-slate-900">{t("settingsLanguageTitle")}</div>
+                    <p className="mt-1 text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
+                    <div className="mt-4 max-w-xs">
+                      <label className="mb-1 block text-sm text-slate-700">{t("languageModeLabel")}</label>
+                      <select
+                        value={langMode}
+                        onChange={(event) => setLangMode(event.target.value as LangMode)}
+                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                      >
+                        <option value="auto">{t("langAuto")}</option>
+                        <option value="zh-CN">{t("langZh")}</option>
+                        <option value="en-US">{t("langEn")}</option>
+                      </select>
+                    </div>
+                  </Card>
 
-                <Card className="p-4">
-                  <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
-                  <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
-                  <div className="mt-3 space-y-3">
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyToggle")}</label>
+                  <Card className="p-4">
+                    <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
+                    <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyToggle")}</label>
+                        <div className="flex gap-2">
+                          <input
+                            value={normalizeHotkeyLabel(hotkeyToggle)}
+                            readOnly
+                            placeholder={t("settingsHotkeyTogglePlaceholder")}
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
+                          />
+                          <Button variant="outline" type="button" onClick={() => setCaptureTarget("toggle")} disabled={savingHotkeys}>
+                            {captureTarget === "toggle" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
                       <div className="flex gap-2">
-                        <input
-                          value={normalizeHotkeyLabel(hotkeyToggle)}
-                          readOnly
-                          placeholder={t("settingsHotkeyTogglePlaceholder")}
-                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
-                        />
-                        <Button
-                          variant="outline"
-                          type="button"
-                          onClick={() => setCaptureTarget("toggle")}
-                          disabled={savingHotkeys}
-                        >
-                          {captureTarget === "toggle" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
+                        <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys}>
+                          {savingHotkeys ? <Loader2 size={14} className="animate-spin" /> : null}
+                          {t("settingsHotkeySave")}
                         </Button>
+                        <Button variant="outline" onClick={onResetHotkeys} disabled={savingHotkeys}>{t("settingsHotkeyReset")}</Button>
                       </div>
                     </div>
-                    <div>
-                      <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyInsert")}</label>
-                      <div className="flex gap-2">
-                        <input
-                          value={normalizeHotkeyLabel(hotkeyInsert)}
-                          readOnly
-                          placeholder={t("settingsHotkeyInsertPlaceholder")}
-                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
-                        />
-                        <Button
-                          variant="outline"
-                          type="button"
-                          onClick={() => setCaptureTarget("insert")}
-                          disabled={savingHotkeys}
-                        >
-                          {captureTarget === "insert" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
-                        </Button>
-                      </div>
-                    </div>
-                    <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
-                    <div className="flex gap-2">
-                      <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys}>
-                        {savingHotkeys ? <Loader2 size={14} className="animate-spin" /> : null}
-                        {t("settingsHotkeySave")}
-                      </Button>
-                      <Button variant="outline" onClick={onResetHotkeys} disabled={savingHotkeys}>
-                        {t("settingsHotkeyReset")}
-                      </Button>
-                    </div>
-                  </div>
-                </Card>
+                  </Card>
 
-                <Card className="p-4">
-                  <div className="text-lg font-semibold text-slate-900">{t("settingsTempDirTitle")}</div>
-                  <p className="mt-1 text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
-                  <div className="mt-4">
-                    <Button variant="outline" onClick={onOpenTempDir}>
-                      <FolderOpen size={16} />
-                      {t("settingsOpenTempDir")}
-                    </Button>
-                  </div>
-                </Card>
+                  <Card className="p-4">
+                    <div className="text-lg font-semibold text-slate-900">{t("settingsTempDirTitle")}</div>
+                    <p className="mt-1 text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
+                    <div className="mt-4">
+                      <Button variant="outline" onClick={onOpenTempDir}>
+                        <FolderOpen size={16} />
+                        {t("settingsOpenTempDir")}
+                      </Button>
+                    </div>
+                  </Card>
                 </div>
               </div>
             </section>
@@ -1346,27 +1266,26 @@ function App() {
         </div>
       )}
 
-      {overlayPhase !== "hidden" && (
-        <div className="pointer-events-none fixed left-1/2 top-6 z-50 -translate-x-1/2">
-          <div className="min-w-[300px] rounded-full border border-white/20 bg-black/85 px-5 py-3 text-white shadow-2xl backdrop-blur">
-            <div className="flex items-center justify-between gap-4">
-              <div className="text-xl font-semibold">
-                {overlayPhase === "listening" ? t("overlayListening") : overlayPhase === "thinking" ? t("overlayThinking") : t("overlayReady")}
-              </div>
-              {overlayPhase === "listening" && (
-                <div className="flex items-center gap-1">
-                  <span className="h-2 w-1 rounded-full bg-white animate-pulse" />
-                  <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
-                  <span className="h-6 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
-                  <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
-                  <span className="h-2 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
-                </div>
-              )}
+      {fallbackText && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+          <Card className="w-[min(560px,92vw)] p-4">
+            <div className="text-lg font-semibold">{t("fallbackTitle")}</div>
+            <p className="mt-1 text-sm text-slate-600">{t("fallbackDesc")}</p>
+            <Textarea value={fallbackText} readOnly className="mt-3 min-h-[140px]" />
+            <div className="mt-3 flex gap-2">
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  await navigator.clipboard.writeText(fallbackText);
+                }}
+              >
+                {t("fallbackCopy")}
+              </Button>
+              <Button variant="outline" onClick={() => setFallbackText(null)}>
+                {t("fallbackClose")}
+              </Button>
             </div>
-            {overlayText && overlayPhase !== "listening" && (
-              <div className="mt-1 max-w-[420px] truncate text-sm text-white/80">{overlayText}</div>
-            )}
-          </div>
+          </Card>
         </div>
       )}
 
@@ -1379,6 +1298,13 @@ function App() {
       />
     </main>
   );
+}
+
+function App() {
+  if (window.location.hash.includes("/overlay")) {
+    return <OverlayWindowApp />;
+  }
+  return <MainApp />;
 }
 
 export default App;
