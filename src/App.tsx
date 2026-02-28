@@ -53,6 +53,7 @@ type AccessibilityStatus = {
   trusted: boolean;
   axTrusted?: boolean;
   tccAllowed?: boolean | null;
+  runtimeHint?: string | null;
 };
 
 type GlobalShortcutPayload = {
@@ -856,6 +857,9 @@ function App() {
                         AX: {String(accessibility.axTrusted ?? false)} | TCC:{" "}
                         {accessibility.tccAllowed == null ? "unknown" : String(accessibility.tccAllowed)}
                       </p>
+                      {accessibility.runtimeHint && (
+                        <p className="mt-1 text-xs text-amber-600">{accessibility.runtimeHint}</p>
+                      )}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button variant="outline" onClick={onRequestAccessibilityPermission}>{t("accessRequest")}</Button>

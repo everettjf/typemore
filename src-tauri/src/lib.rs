@@ -56,6 +56,7 @@ struct AccessibilityStatus {
     trusted: bool,
     ax_trusted: bool,
     tcc_allowed: Option<bool>,
+    runtime_hint: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -864,8 +865,20 @@ fn macos_tcc_accessibility_allowed(_app: &AppHandle) -> Option<bool> {
 fn get_accessibility_status(app: AppHandle) -> AccessibilityStatus {
     let ax_trusted = macos_is_accessibility_trusted();
     let tcc_allowed = macos_tcc_accessibility_allowed(&app);
+    let current_exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let runtime_hint = if cfg!(target_os = "macos")
+        && !current_exe.contains(".app/Contents/MacOS/")
+        && (current_exe.contains("/target/debug/") || current_exe.contains("/target/release/"))
+    {
+        Some("Running in dev binary mode; accessibility may be tied to Terminal/iTerm rather than a bundled .app".into())
+    } else {
+        None
+    };
     let trusted = if cfg!(target_os = "macos") {
-        ax_trusted && tcc_allowed.unwrap_or(ax_trusted)
+        ax_trusted && tcc_allowed.unwrap_or(false)
     } else {
         false
     };
@@ -874,6 +887,7 @@ fn get_accessibility_status(app: AppHandle) -> AccessibilityStatus {
         trusted,
         ax_trusted,
         tcc_allowed,
+        runtime_hint,
     }
 }
 
@@ -884,8 +898,20 @@ fn request_accessibility_permission(app: AppHandle) -> AccessibilityStatus {
     }
     let ax_trusted = macos_is_accessibility_trusted();
     let tcc_allowed = macos_tcc_accessibility_allowed(&app);
+    let current_exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let runtime_hint = if cfg!(target_os = "macos")
+        && !current_exe.contains(".app/Contents/MacOS/")
+        && (current_exe.contains("/target/debug/") || current_exe.contains("/target/release/"))
+    {
+        Some("Running in dev binary mode; accessibility may be tied to Terminal/iTerm rather than a bundled .app".into())
+    } else {
+        None
+    };
     let trusted = if cfg!(target_os = "macos") {
-        ax_trusted && tcc_allowed.unwrap_or(ax_trusted)
+        ax_trusted && tcc_allowed.unwrap_or(false)
     } else {
         false
     };
@@ -894,6 +920,7 @@ fn request_accessibility_permission(app: AppHandle) -> AccessibilityStatus {
         trusted,
         ax_trusted,
         tcc_allowed,
+        runtime_hint,
     }
 }
 
