@@ -51,6 +51,8 @@ type OverlayPhase = "hidden" | "listening" | "thinking" | "ready";
 type AccessibilityStatus = {
   supported: boolean;
   trusted: boolean;
+  axTrusted?: boolean;
+  tccAllowed?: boolean | null;
 };
 
 type GlobalShortcutPayload = {
@@ -849,6 +851,10 @@ function App() {
                       </div>
                       <p className="mt-1 text-sm text-slate-600">
                         {accessibility.trusted ? t("accessGranted") : t("accessNeed")}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        AX: {String(accessibility.axTrusted ?? false)} | TCC:{" "}
+                        {accessibility.tccAllowed == null ? "unknown" : String(accessibility.tccAllowed)}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
