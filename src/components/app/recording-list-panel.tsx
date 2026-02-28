@@ -70,7 +70,9 @@ export function RecordingListPanel({
             {modelReady ? "Ready" : initStatus.running ? "Running" : "Not Ready"}
           </Badge>
         </div>
-        <div className="text-sm text-slate-700">{initStatus.message}</div>
+        <div className="text-sm text-slate-700 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis">
+          {initStatus.message}
+        </div>
         <Progress value={Math.min(100, Math.max(0, initStatus.progress))} />
         {initStatus.error && <div className="text-xs text-red-600">{initStatus.error}</div>}
       </div>

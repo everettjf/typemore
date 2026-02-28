@@ -14,7 +14,7 @@ export function Progress({ value, className }: ProgressProps) {
       value={bounded}
     >
       <ProgressPrimitive.Indicator
-        className="h-full w-full bg-gradient-to-r from-sky-500 to-indigo-500 transition-all"
+        className="h-full w-full bg-gradient-to-r from-sky-500 to-indigo-500 transition-transform duration-150 ease-linear"
         style={{ transform: `translateX(-${100 - bounded}%)` }}
       />
     </ProgressPrimitive.Root>

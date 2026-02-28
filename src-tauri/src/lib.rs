@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager};
 use walkdir::WalkDir;
@@ -326,6 +326,8 @@ fn download_file_with_progress(
 
     let mut downloaded: u64 = 0;
     let mut buffer = [0u8; 64 * 1024];
+    let mut last_emit = Instant::now();
+    let mut last_ratio = 0.0f32;
 
     loop {
         let n = resp
@@ -341,15 +343,23 @@ fn download_file_with_progress(
         downloaded += n as u64;
         let message = if let Some(all) = total {
             let p = (downloaded as f32 / all as f32).clamp(0.0, 1.0);
-            on_progress(
-                80.0 * p,
-                format!(
-                    "下载模型中... {:.1}% ({:.1} MB / {:.1} MB)",
-                    p * 100.0,
-                    downloaded as f32 / 1_048_576.0,
-                    all as f32 / 1_048_576.0
-                ),
-            );
+            // Throttle progress events to avoid UI flicker from overly frequent updates.
+            let should_emit = p >= 1.0
+                || (p - last_ratio) >= 0.003
+                || last_emit.elapsed().as_millis() >= 120;
+            if should_emit {
+                on_progress(
+                    80.0 * p,
+                    format!(
+                        "下载模型中... {:.1}% ({:.1} MB / {:.1} MB)",
+                        p * 100.0,
+                        downloaded as f32 / 1_048_576.0,
+                        all as f32 / 1_048_576.0
+                    ),
+                );
+                last_emit = Instant::now();
+                last_ratio = p;
+            }
             continue;
         } else {
             format!("下载模型中... {:.1} MB", downloaded as f32 / 1_048_576.0)
