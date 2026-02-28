@@ -12,7 +12,7 @@ use std::{
     sync::Mutex,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use walkdir::WalkDir;
 
@@ -165,6 +165,40 @@ fn build_hotkey_config(toggle: &str) -> Result<HotkeyConfig, String> {
         toggle: toggle.to_string(),
         toggle_id: toggle_shortcut.id(),
     })
+}
+
+fn apply_toggle_shortcut(app: &AppHandle, new_config: HotkeyConfig) -> Result<HotkeyConfig, String> {
+    let state = app.state::<AppState>();
+    let old_config = {
+        let lock = state
+            .hotkeys
+            .lock()
+            .map_err(|_| "failed to read current hotkeys".to_string())?;
+        lock.clone()
+    };
+
+    let manager = app.global_shortcut();
+    if old_config.toggle != new_config.toggle && manager.is_registered(old_config.toggle.as_str()) {
+        manager
+            .unregister(old_config.toggle.as_str())
+            .map_err(|e| format!("failed to unregister old toggle shortcut: {e}"))?;
+    }
+
+    if !manager.is_registered(new_config.toggle.as_str()) {
+        manager
+            .register(new_config.toggle.as_str())
+            .map_err(|e| format!("failed to register toggle shortcut: {e}"))?;
+    }
+
+    {
+        let mut lock = state
+            .hotkeys
+            .lock()
+            .map_err(|_| "failed to update hotkey settings".to_string())?;
+        *lock = new_config.clone();
+    }
+
+    Ok(new_config)
 }
 
 fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1138,44 +1172,17 @@ fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
 #[tauri::command]
 fn set_global_shortcuts(app: AppHandle, toggle: String) -> Result<HotkeySettings, String> {
     let new_config = build_hotkey_config(&toggle)?;
-    let state = app.state::<AppState>();
-
-    let old_config = {
-        let lock = state
-            .hotkeys
-            .lock()
-            .map_err(|_| "failed to read current hotkeys".to_string())?;
-        lock.clone()
-    };
-
-    let manager = app.global_shortcut();
-    if manager.is_registered(old_config.toggle.as_str()) {
-        manager
-            .unregister(old_config.toggle.as_str())
-            .map_err(|e| format!("failed to unregister old toggle shortcut: {e}"))?;
-    }
-    if let Err(e) = manager.register(new_config.toggle.as_str()) {
-        let _ = manager.register(old_config.toggle.as_str());
-        return Err(format!("failed to register toggle shortcut: {e}"));
-    }
-
-    {
-        let mut lock = state
-            .hotkeys
-            .lock()
-            .map_err(|_| "failed to update hotkey settings".to_string())?;
-        *lock = new_config.clone();
-    }
+    let applied = apply_toggle_shortcut(&app, new_config)?;
 
     save_persisted_hotkeys(
         &app,
         &PersistedHotkeySettings {
-            toggle: new_config.toggle.clone(),
+            toggle: applied.toggle.clone(),
         },
     )?;
 
     Ok(HotkeySettings {
-        toggle: new_config.toggle,
+        toggle: applied.toggle,
     })
 }
 
@@ -1195,8 +1202,6 @@ pub fn run() {
         .manage(AppState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts([HOTKEY_TOGGLE_DICTATION])
-                .expect("failed to configure global shortcuts")
                 .with_handler(|app, shortcut, event: ShortcutEvent| {
                     if event.state != ShortcutState::Pressed {
                         return;
@@ -1222,44 +1227,56 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let manager = app.global_shortcut();
-            let state = app.state::<AppState>();
-            let default_lock = state
-                .hotkeys
-                .lock()
-                .map_err(|_| "failed to read hotkeys at setup".to_string())?;
-            if !manager.is_registered(default_lock.toggle.as_str()) {
-                manager
-                    .register(default_lock.toggle.as_str())
-                    .map_err(|e| format!("failed to register toggle shortcut: {e}"))?;
-            }
-            drop(default_lock);
-
-            if let Some(saved) = load_persisted_hotkeys(app.handle())? {
-                if let Ok(saved_cfg) = build_hotkey_config(&saved.toggle) {
-                    let old_toggle = {
-                        let lock = state
-                            .hotkeys
-                            .lock()
-                            .map_err(|_| "failed to read current hotkeys at setup".to_string())?;
-                        lock.toggle.clone()
-                    };
-                    if old_toggle != saved_cfg.toggle {
-                        if manager.is_registered(old_toggle.as_str()) {
-                            let _ = manager.unregister(old_toggle.as_str());
-                        }
-                        manager
-                            .register(saved_cfg.toggle.as_str())
-                            .map_err(|e| format!("failed to register saved toggle shortcut: {e}"))?;
-                        let mut lock = state
-                            .hotkeys
-                            .lock()
-                            .map_err(|_| "failed to apply saved hotkeys at setup".to_string())?;
-                        *lock = saved_cfg;
+            let desired_cfg = match load_persisted_hotkeys(app.handle())? {
+                Some(saved) => match build_hotkey_config(&saved.toggle) {
+                    Ok(cfg) => cfg,
+                    Err(err) => {
+                        eprintln!(
+                            "[typemore] invalid persisted hotkey '{}', fallback to default: {}",
+                            saved.toggle, err
+                        );
+                        build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?
                     }
-                }
+                },
+                None => build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?,
+            };
+
+            if let Err(err) = apply_toggle_shortcut(app.handle(), desired_cfg.clone()) {
+                eprintln!(
+                    "[typemore] failed to register hotkey '{}': {}. fallback to default",
+                    desired_cfg.toggle, err
+                );
+                let fallback = build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?;
+                apply_toggle_shortcut(app.handle(), fallback.clone())?;
+                save_persisted_hotkeys(
+                    app.handle(),
+                    &PersistedHotkeySettings {
+                        toggle: fallback.toggle,
+                    },
+                )?;
+            } else if desired_cfg.toggle != HOTKEY_TOGGLE_DICTATION {
+                let _ = save_persisted_hotkeys(
+                    app.handle(),
+                    &PersistedHotkeySettings {
+                        toggle: desired_cfg.toggle,
+                    },
+                );
             }
-            let _ = ensure_overlay_window(app.handle());
+
+            if let Ok(lock) = app.state::<AppState>().hotkeys.lock() {
+                eprintln!("[typemore] active hotkey: {}", lock.toggle);
+            }
+
+            if let Err(err) = ensure_overlay_window(app.handle()) {
+                eprintln!("[typemore] failed to create overlay window: {}", err);
+            } else if let Some(overlay) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+                let _ = overlay.once("tauri://webview-created", |_| {
+                    eprintln!("[typemore] overlay webview created");
+                });
+                let _ = overlay.once("tauri://error", |_| {
+                    eprintln!("[typemore] overlay webview error");
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
