@@ -314,7 +314,7 @@ function OverlayWindowApp() {
     <main className="h-screen w-screen bg-transparent p-2">
       <div className="mx-auto mt-0 w-[420px] rounded-2xl border border-white/20 bg-black/90 px-5 py-3 text-white shadow-2xl">
         <div className="flex items-center justify-between gap-4">
-          <div className="text-2xl font-semibold tracking-tight leading-none">{title}</div>
+          <div className="text-xs font-semibold tracking-tight leading-none">{title}</div>
           {phase === "listening" && (
             <div className="flex items-center gap-2">
               <span className="h-2.5 w-1 rounded-full bg-white animate-pulse" />
