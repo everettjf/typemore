@@ -63,8 +63,8 @@ type GlobalShortcutPayload = {
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
-const HOTKEY_TOGGLE = "Cmd/Ctrl + Shift + Space";
-const HOTKEY_INSERT = "Cmd/Ctrl + Shift + Enter";
+const HOTKEY_TOGGLE = "Cmd/Ctrl + Option/Alt + Space";
+const HOTKEY_INSERT = "Cmd/Ctrl + Option/Alt + Enter";
 
 const I18N = {
   zh: {

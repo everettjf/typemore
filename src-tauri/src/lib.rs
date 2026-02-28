@@ -22,8 +22,8 @@ const TEMP_DIR_NAME: &str = "tmp";
 const TRANSCRIPT_CACHE_FILE: &str = "transcript_cache.json";
 const INIT_EVENT: &str = "model-init-progress";
 const HOTKEY_EVENT: &str = "global-shortcut-triggered";
-const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Shift+Space";
-const HOTKEY_INSERT_TEXT: &str = "CommandOrControl+Shift+Enter";
+const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Alt+Space";
+const HOTKEY_INSERT_TEXT: &str = "CommandOrControl+Alt+Enter";
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
