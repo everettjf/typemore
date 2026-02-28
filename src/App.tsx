@@ -940,7 +940,10 @@ function MainApp() {
       <div className="mx-auto grid h-[calc(100vh-1.5rem)] max-w-[1540px] grid-cols-1 gap-3 rounded-3xl border border-white/70 bg-white/60 p-3 shadow-2xl shadow-slate-200/70 backdrop-blur md:h-[calc(100vh-2.5rem)] md:grid-cols-[230px_1fr] md:p-4">
         <aside className="flex min-h-0 flex-col rounded-2xl border border-slate-200/80 bg-white/95 p-3">
           <div className="px-2 pb-3 pt-1">
-            <div className="text-2xl font-bold tracking-tight">Type More</div>
+            <div className="flex items-center gap-2">
+              <img src="/favicon.png" alt="Type More" className="h-7 w-7 rounded-md" />
+              <div className="text-2xl font-bold tracking-tight">Type More</div>
+            </div>
           </div>
 
           <nav className="space-y-1">
