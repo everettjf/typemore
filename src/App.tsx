@@ -850,8 +850,8 @@ function MainApp() {
   ];
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#edf4ff,_#f8fafc_50%,_#eef7ff)] p-3 text-slate-900 md:p-5">
-      <div className="mx-auto grid h-[calc(100vh-1.5rem)] max-w-[1540px] grid-cols-1 gap-3 rounded-3xl border border-white/70 bg-white/60 p-3 shadow-2xl shadow-slate-200/70 backdrop-blur md:h-[calc(100vh-2.5rem)] md:grid-cols-[230px_1fr] md:p-4">
+    <main className="h-screen bg-[radial-gradient(circle_at_top_left,_#edf4ff,_#f8fafc_50%,_#eef7ff)] p-0 text-slate-900">
+      <div className="mx-auto grid h-full max-w-[1540px] grid-cols-1 gap-3 rounded-3xl border border-white/70 bg-white/60 p-3 shadow-2xl shadow-slate-200/70 backdrop-blur md:grid-cols-[230px_1fr] md:p-4">
         <aside className="flex min-h-0 flex-col rounded-2xl border border-slate-200/80 bg-white/95 p-3">
           <div className="px-2 pb-3 pt-1">
             <div className="flex items-center gap-2">
@@ -894,9 +894,9 @@ function MainApp() {
           </div>
         </aside>
 
-        <section className="min-h-0 overflow-hidden rounded-2xl border border-slate-200/80 bg-white/95 p-4 md:p-5">
+        <section className="min-h-0 overflow-y-auto rounded-2xl border border-slate-200/80 bg-white/95 p-4 md:p-5">
           {page === "home" && (
-            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_auto_auto_1fr]">
+            <div className="grid min-h-full gap-4 md:grid-rows-[auto_auto_auto_1fr]">
               <header className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h1 className="text-3xl font-semibold tracking-tight">{t("titleHome")}</h1>
