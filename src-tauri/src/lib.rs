@@ -1164,23 +1164,31 @@ fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Resu
 
 fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Result<(), String> {
     let overlay = ensure_overlay_window(app)?;
+    let payload = OverlayStatePayload {
+        phase: phase.to_string(),
+        text,
+    };
+
     if phase == "hidden" {
+        overlay
+            .emit(OVERLAY_EVENT, payload.clone())
+            .map_err(|e| format!("failed to emit overlay state to overlay window: {e}"))?;
+        let _ = app.emit(OVERLAY_EVENT, payload);
         let _ = overlay.hide();
+        return Ok(());
     } else {
         let _ = place_overlay_window(app, &overlay);
+        let _ = overlay.unminimize();
         let _ = overlay.show();
         let _ = overlay.set_always_on_top(true);
         let _ = overlay.set_visible_on_all_workspaces(true);
     }
 
-    app.emit(
-        OVERLAY_EVENT,
-        OverlayStatePayload {
-            phase: phase.to_string(),
-            text,
-        },
-    )
-    .map_err(|e| format!("failed to emit overlay state: {e}"))?;
+    overlay
+        .emit(OVERLAY_EVENT, payload.clone())
+        .map_err(|e| format!("failed to emit overlay state to overlay window: {e}"))?;
+    app.emit(OVERLAY_EVENT, payload)
+        .map_err(|e| format!("failed to emit overlay state to app: {e}"))?;
     Ok(())
 }
 

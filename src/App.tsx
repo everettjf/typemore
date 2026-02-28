@@ -418,8 +418,8 @@ function MainApp() {
   async function setOverlayState(phase: "listening" | "thinking" | "ready", text?: string) {
     try {
       await invoke("set_overlay_state", { phase, text: text ?? null });
-    } catch {
-      // ignore overlay failures in main flow
+    } catch (err) {
+      setTranscript(`[overlay] ${String(err)}`);
     }
   }
 
