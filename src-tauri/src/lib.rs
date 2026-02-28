@@ -12,7 +12,7 @@ use std::{
     sync::Mutex,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Listener, Manager};
+use tauri::{AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition, Position, Size};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use walkdir::WalkDir;
 
@@ -27,6 +27,9 @@ const HOTKEY_EVENT: &str = "global-shortcut-triggered";
 const OVERLAY_EVENT: &str = "overlay-state";
 const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Alt+Space";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
+const OVERLAY_WIDTH: f64 = 420.0;
+const OVERLAY_HEIGHT: f64 = 88.0;
+const OVERLAY_BOTTOM_MARGIN: i32 = 96;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -1109,8 +1112,8 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
     .skip_taskbar(true)
     .focusable(false)
     .focused(false)
-    .inner_size(560.0, 120.0)
-    .position(360.0, 36.0)
+    .inner_size(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+    .position(120.0, 120.0)
     .shadow(false)
     .transparent(true)
     .visible(false)
@@ -1133,7 +1136,30 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
         }
     }
 
+    let _ = place_overlay_window(app, &overlay);
+
     Ok(overlay)
+}
+
+fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Result<(), String> {
+    let _ = overlay.set_size(Size::Logical(LogicalSize::new(OVERLAY_WIDTH, OVERLAY_HEIGHT)));
+
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|w| w.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten());
+
+    if let Some(monitor) = monitor {
+        let monitor_size = monitor.size();
+        let monitor_pos = monitor.position();
+        let width = OVERLAY_WIDTH.round() as i32;
+        let height = OVERLAY_HEIGHT.round() as i32;
+        let x = monitor_pos.x + ((monitor_size.width as i32 - width) / 2).max(0);
+        let y = monitor_pos.y + (monitor_size.height as i32 - height - OVERLAY_BOTTOM_MARGIN).max(0);
+        let _ = overlay.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+    }
+
+    Ok(())
 }
 
 fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Result<(), String> {
@@ -1141,6 +1167,7 @@ fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Res
     if phase == "hidden" {
         let _ = overlay.hide();
     } else {
+        let _ = place_overlay_window(app, &overlay);
         let _ = overlay.show();
         let _ = overlay.set_always_on_top(true);
         let _ = overlay.set_visible_on_all_workspaces(true);

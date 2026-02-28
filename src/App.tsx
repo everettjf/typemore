@@ -311,21 +311,21 @@ function OverlayWindowApp() {
 
   const title = phase === "listening" ? "正在听..." : phase === "thinking" ? "识别中..." : "就绪";
   return (
-    <main className="h-screen w-screen bg-transparent p-4">
-      <div className="mx-auto mt-1 w-[520px] rounded-full border border-white/20 bg-black/90 px-8 py-5 text-white shadow-2xl">
+    <main className="h-screen w-screen bg-transparent p-2">
+      <div className="mx-auto mt-0 w-[420px] rounded-2xl border border-white/20 bg-black/90 px-5 py-3 text-white shadow-2xl">
         <div className="flex items-center justify-between gap-4">
-          <div className="text-5xl font-semibold tracking-tight leading-none">{title}</div>
+          <div className="text-2xl font-semibold tracking-tight leading-none">{title}</div>
           {phase === "listening" && (
             <div className="flex items-center gap-2">
-              <span className="h-3 w-1 rounded-full bg-white animate-pulse" />
-              <span className="h-6 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
-              <span className="h-8 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
-              <span className="h-6 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
-              <span className="h-3 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
+              <span className="h-2.5 w-1 rounded-full bg-white animate-pulse" />
+              <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
+              <span className="h-5 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
+              <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
+              <span className="h-2.5 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
             </div>
           )}
         </div>
-        {text && phase !== "listening" && <div className="mt-2 truncate text-sm text-white/80">{text}</div>}
+        {text && phase !== "listening" && <div className="mt-1 truncate text-xs text-white/80">{text}</div>}
       </div>
     </main>
   );
