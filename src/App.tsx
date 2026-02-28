@@ -344,6 +344,8 @@ function MainApp() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const isRecordingRef = useRef(false);
+  const modelReadyRef = useRef(false);
   const recordingByHotkeyRef = useRef(false);
   const lastHotkeyAtRef = useRef(0);
 
@@ -353,6 +355,14 @@ function MainApp() {
   );
 
   const modelReady = initStatus.ready;
+
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    modelReadyRef.current = modelReady;
+  }, [modelReady]);
 
   const uiLang: UiLang = useMemo(() => {
     if (langMode === "zh-CN") {
@@ -620,6 +630,7 @@ function MainApp() {
     };
 
     recorder.start();
+    isRecordingRef.current = true;
     setIsRecording(true);
   }
 
@@ -630,6 +641,7 @@ function MainApp() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     recorderRef.current = null;
+    isRecordingRef.current = false;
     setIsRecording(false);
   }
 
@@ -657,13 +669,13 @@ function MainApp() {
     }
     lastHotkeyAtRef.current = now;
 
-    if (isRecording) {
+    if (isRecordingRef.current) {
       await setOverlayState("thinking");
       stopRecording();
       return;
     }
 
-    if (!modelReady) {
+    if (!modelReadyRef.current) {
       try {
         const status = await invoke<ModelInitStatus>("init_model");
         setInitStatus(status);
