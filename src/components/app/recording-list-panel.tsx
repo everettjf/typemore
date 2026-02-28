@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { Brain, CircleDot, Loader2, Mic, Sparkles } from "lucide-react";
 import type { RecordingItem, ModelInitStatus } from "./types";
@@ -19,6 +20,7 @@ type RecordingListPanelProps = {
   isBusy: boolean;
   onRecordClick: () => void;
   onInitModel: () => void;
+  onOpenTempDir: () => void;
   onSelect: (id: string) => void;
   onRename: (recording: RecordingItem) => void;
   onDelete: (recording: RecordingItem) => void;
@@ -33,10 +35,36 @@ export function RecordingListPanel({
   isBusy,
   onRecordClick,
   onInitModel,
+  onOpenTempDir,
   onSelect,
   onRename,
   onDelete,
 }: RecordingListPanelProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+    const onDocClick = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, [menuOpen]);
+
   return (
     <Card className="flex min-h-0 flex-col bg-white/90">
       <div className="flex flex-wrap gap-2 border-b border-slate-200 p-3">
@@ -61,6 +89,30 @@ export function RecordingListPanel({
           {initStatus.running ? <Loader2 className="animate-spin" size={15} /> : <Brain size={15} />}
           {initStatus.running ? "初始化中..." : initStatus.ready ? "模型已就绪" : "初始化模型"}
         </Button>
+
+        <div className="relative" ref={menuRef}>
+          <Button
+            variant="outline"
+            className="inline-flex items-center gap-1"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            菜单
+          </Button>
+          {menuOpen && (
+            <div className="absolute right-0 top-[calc(100%+6px)] z-20 min-w-40 rounded-md border border-slate-200 bg-white p-1 shadow-xl">
+              <button
+                type="button"
+                className="block w-full rounded px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onOpenTempDir();
+                }}
+              >
+                打开临时目录
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="space-y-3 border-b border-slate-200 p-3">

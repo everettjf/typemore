@@ -16,6 +16,7 @@ const MODEL_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/
 const MODEL_DIR_NAME: &str = "sherpa-model";
 const EXTRACTED_DIR_NAME: &str = "extracted";
 const RECORDINGS_DIR_NAME: &str = "recordings";
+const TEMP_DIR_NAME: &str = "tmp";
 const TRANSCRIPT_CACHE_FILE: &str = "transcript_cache.json";
 const INIT_EVENT: &str = "model-init-progress";
 
@@ -102,6 +103,12 @@ fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn transcript_cache_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(recordings_dir(app)?.join(TRANSCRIPT_CACHE_FILE))
+}
+
+fn temp_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_data_dir(app)?.join(TEMP_DIR_NAME);
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp dir: {e}"))?;
+    Ok(dir)
 }
 
 fn model_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -703,6 +710,25 @@ fn save_recording_and_transcribe(
     Ok(SaveAndTranscribeResult { recording, text })
 }
 
+#[tauri::command]
+fn open_temp_dir(app: AppHandle) -> Result<String, String> {
+    let dir = temp_dir(&app)?;
+    let status = if cfg!(target_os = "macos") {
+        Command::new("open").arg(&dir).status()
+    } else if cfg!(target_os = "windows") {
+        Command::new("explorer").arg(&dir).status()
+    } else {
+        Command::new("xdg-open").arg(&dir).status()
+    }
+    .map_err(|e| format!("failed to open temp dir: {e}"))?;
+
+    if !status.success() {
+        return Err("failed to open temp dir in file manager".into());
+    }
+
+    Ok(dir.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -717,7 +743,8 @@ pub fn run() {
             delete_recording,
             get_recording_cached_transcript,
             transcribe_recording,
-            save_recording_and_transcribe
+            save_recording_and_transcribe,
+            open_temp_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

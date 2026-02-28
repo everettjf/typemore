@@ -328,6 +328,15 @@ function App() {
     }
   }
 
+  async function onOpenTempDir() {
+    try {
+      const dir = await invoke<string>("open_temp_dir");
+      setTranscript(`已打开临时目录: ${dir}`);
+    } catch (err) {
+      setTranscript(`打开临时目录失败: ${String(err)}`);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#eff6ff,_#f8fafc_55%,_#ecfeff)] p-4 text-slate-900 md:p-6">
       <div className="mx-auto grid h-[calc(100vh-2rem)] max-w-[1520px] grid-cols-1 gap-4 rounded-2xl border border-white/70 bg-white/60 p-3 shadow-xl shadow-slate-200/60 backdrop-blur md:h-[calc(100vh-3rem)] md:grid-cols-[370px_1fr] md:p-4">
@@ -340,6 +349,7 @@ function App() {
           isBusy={isBusy}
           onRecordClick={onRecordClick}
           onInitModel={onInitModel}
+          onOpenTempDir={onOpenTempDir}
           onSelect={setSelectedId}
           onRename={onRename}
           onDelete={onDelete}
