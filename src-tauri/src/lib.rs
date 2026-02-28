@@ -988,19 +988,28 @@ fn type_text_to_focused_app(text: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let toggle_shortcut: tauri_plugin_global_shortcut::Shortcut = HOTKEY_TOGGLE_DICTATION
+        .parse()
+        .expect("invalid HOTKEY_TOGGLE_DICTATION");
+    let insert_shortcut: tauri_plugin_global_shortcut::Shortcut = HOTKEY_INSERT_TEXT
+        .parse()
+        .expect("invalid HOTKEY_INSERT_TEXT");
+    let toggle_shortcut_id = toggle_shortcut.id();
+    let insert_shortcut_id = insert_shortcut.id();
+
     tauri::Builder::default()
         .manage(AppState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_shortcuts([HOTKEY_TOGGLE_DICTATION, HOTKEY_INSERT_TEXT])
                 .expect("failed to configure global shortcuts")
-                .with_handler(|app, shortcut, event: ShortcutEvent| {
+                .with_handler(move |app, shortcut, event: ShortcutEvent| {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    let action = if shortcut.to_string() == HOTKEY_TOGGLE_DICTATION {
+                    let action = if shortcut.id() == toggle_shortcut_id {
                         "toggle-dictation"
-                    } else if shortcut.to_string() == HOTKEY_INSERT_TEXT {
+                    } else if shortcut.id() == insert_shortcut_id {
                         "insert-transcript"
                     } else {
                         return;
