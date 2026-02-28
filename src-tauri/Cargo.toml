@@ -1,7 +1,7 @@
 [package]
-name = "typemore"
+name = "TypeMore"
 version = "0.1.0"
-description = "A Tauri App"
+description = "Type More With Your Voice"
 authors = ["you"]
 edition = "2021"
 

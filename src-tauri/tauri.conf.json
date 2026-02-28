@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Typemore",
+  "productName": "TypeMore",
   "version": "0.1.0",
   "identifier": "com.xnu.typemore",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Typemore",
+        "title": "TypeMore",
         "width": 1220,
         "height": 780,
         "minWidth": 980,
