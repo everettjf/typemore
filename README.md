@@ -102,6 +102,24 @@ bun run build
 cd src-tauri && cargo check
 ```
 
+## Release to Homebrew
+
+Prepare your release archive in `build/` (for example `build/typemore-v0.1.1-macos.zip`), then run:
+
+```bash
+TAP_REPO=yourname/homebrew-tap \
+FORMULA_PATH=Casks/typemore.rb \
+./scripts/release_to_homebrew.sh
+```
+
+Notes:
+
+- `TAP_REPO` is required, format: `owner/repo`.
+- `FORMULA_PATH` is required, e.g. `Casks/typemore.rb` or `Formula/typemore.rb`.
+- If your file is not under `build/`, provide `ASSET_PATH=/absolute/path/to/file.zip`.
+- To skip auto version bump: `SKIP_BUMP=1`.
+- A cask template is provided at `docs/homebrew/typemore.rb.example`.
+
 ## Data Storage
 
 The app stores model and audio files under Tauri `app_data_dir`:

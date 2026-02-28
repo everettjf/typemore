@@ -1,0 +1,11 @@
+cask "typemore" do
+  version "0.1.0"
+  sha256 "REPLACE_WITH_REAL_SHA256"
+
+  url "https://github.com/everettjf/Typemore/releases/download/v#{version}/typemore-v#{version}-macos.zip"
+  name "Typemore"
+  desc "Offline speech recognition desktop app built with Tauri"
+  homepage "https://github.com/everettjf/Typemore"
+
+  app "Typemore.app"
+end
