@@ -36,66 +36,47 @@ const OVERLAY_BOTTOM_MARGIN: i32 = 150;
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
+    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
 }
 
 #[cfg(target_os = "macos")]
 fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
-    use block::ConcreteBlock;
-    use objc::{class, msg_send, runtime::Object, sel, sel_impl};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    };
-
-    let fn_is_down = Arc::new(AtomicBool::new(false));
     let app_handle = app.clone();
-    let fn_is_down_in_handler = fn_is_down.clone();
+    std::thread::spawn(move || {
+        // kCGEventSourceStateHIDSystemState
+        const STATE_HID_SYSTEM: i32 = 1;
+        // kCGEventSourceStateCombinedSessionState
+        const STATE_COMBINED_SESSION: i32 = 0;
+        // macOS virtual keycode for Fn/Globe.
+        const KEYCODE_FN: u16 = 63;
 
-    let handler = ConcreteBlock::new(move |event: *mut Object| {
-        if event.is_null() {
-            return;
-        }
-
-        // NSEventModifierFlagFunction. On modern keyboards this also maps the Globe/Fn key.
-        const MODIFIER_FLAG_FUNCTION: u64 = 1 << 23;
-        let flags: u64 = unsafe { msg_send![event, modifierFlags] };
-        let is_down = (flags & MODIFIER_FLAG_FUNCTION) != 0;
-        let was_down = fn_is_down_in_handler.swap(is_down, Ordering::SeqCst);
-
-        if is_down && !was_down {
-            let fn_enabled = app_handle
-                .state::<AppState>()
-                .fn_key_enabled
-                .lock()
-                .map(|v| *v)
-                .unwrap_or(false);
-            if !fn_enabled {
-                return;
+        let mut was_down = false;
+        loop {
+            let is_down = unsafe {
+                CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_FN)
+                    || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_FN)
+            };
+            if is_down && !was_down {
+                let fn_enabled = app_handle
+                    .state::<AppState>()
+                    .fn_key_enabled
+                    .lock()
+                    .map(|v| *v)
+                    .unwrap_or(false);
+                if fn_enabled {
+                    let _ = app_handle.emit(
+                        HOTKEY_EVENT,
+                        GlobalShortcutPayload {
+                            action: "toggle-dictation".to_string(),
+                            shortcut: "Fn".to_string(),
+                        },
+                    );
+                }
             }
-            let _ = app_handle.emit(
-                HOTKEY_EVENT,
-                GlobalShortcutPayload {
-                    action: "toggle-dictation".to_string(),
-                    shortcut: "Fn".to_string(),
-                },
-            );
+            was_down = is_down;
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
-    })
-    .copy();
-
-    // NSEventMaskFlagsChanged.
-    const EVENT_MASK_FLAGS_CHANGED: u64 = 1 << 12;
-    unsafe {
-        let ns_event_cls = class!(NSEvent);
-        let _: *mut Object = msg_send![
-            ns_event_cls,
-            addGlobalMonitorForEventsMatchingMask: EVENT_MASK_FLAGS_CHANGED
-            handler: &*handler
-        ];
-    }
-
-    // Keep monitor callback alive for app lifetime.
-    std::mem::forget(handler);
+    });
     Ok(())
 }
 
