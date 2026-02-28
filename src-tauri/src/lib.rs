@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sherpa_rs::{paraformer::ParaformerConfig, paraformer::ParaformerRecognizer};
 use std::{
     collections::HashMap,
+    ffi::c_void,
     fs,
     io::{BufWriter, Cursor, Read, Write},
     path::{Path, PathBuf},
@@ -10,6 +11,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use walkdir::WalkDir;
 
 const MODEL_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2";
@@ -19,6 +21,16 @@ const RECORDINGS_DIR_NAME: &str = "recordings";
 const TEMP_DIR_NAME: &str = "tmp";
 const TRANSCRIPT_CACHE_FILE: &str = "transcript_cache.json";
 const INIT_EVENT: &str = "model-init-progress";
+const HOTKEY_EVENT: &str = "global-shortcut-triggered";
+const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Shift+Space";
+const HOTKEY_INSERT_TEXT: &str = "CommandOrControl+Shift+Enter";
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
+}
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +47,20 @@ struct ModelStatus {
     ready: bool,
     model_path: Option<String>,
     tokens_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessibilityStatus {
+    supported: bool,
+    trusted: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GlobalShortcutPayload {
+    action: String,
+    shortcut: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -729,11 +755,159 @@ fn open_temp_dir(app: AppHandle) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+#[cfg(target_os = "macos")]
+fn macos_is_accessibility_trusted() -> bool {
+    // SAFETY: AXIsProcessTrusted is a pure system query function.
+    unsafe { AXIsProcessTrusted() }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_is_accessibility_trusted() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn macos_request_accessibility_permission() -> bool {
+    use core_foundation::{base::TCFType, boolean::CFBoolean, dictionary::CFDictionary, string::CFString};
+
+    let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
+    let prompt_true = CFBoolean::true_value();
+    let options = CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_true.as_CFType())]);
+
+    // SAFETY: AXIsProcessTrustedWithOptions reads the provided CFDictionary options.
+    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const c_void) }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_request_accessibility_permission() -> bool {
+    false
+}
+
+#[tauri::command]
+fn get_accessibility_status() -> AccessibilityStatus {
+    AccessibilityStatus {
+        supported: cfg!(target_os = "macos"),
+        trusted: macos_is_accessibility_trusted(),
+    }
+}
+
+#[tauri::command]
+fn request_accessibility_permission() -> AccessibilityStatus {
+    if cfg!(target_os = "macos") {
+        let _ = macos_request_accessibility_permission();
+    }
+    AccessibilityStatus {
+        supported: cfg!(target_os = "macos"),
+        trusted: macos_is_accessibility_trusted(),
+    }
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("accessibility settings are only supported on macOS".into());
+    }
+
+    let mut status = Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .status()
+        .map_err(|e| format!("failed to open accessibility settings: {e}"))?;
+
+    if !status.success() {
+        status = Command::new("open")
+            .arg("/System/Library/PreferencePanes/Security.prefPane")
+            .status()
+            .map_err(|e| format!("failed to open Security preferences: {e}"))?;
+        if !status.success() {
+            return Err("failed to open accessibility settings".into());
+        }
+    }
+
+    Ok(())
+}
+
+fn escape_applescript_text(input: &str) -> String {
+    let mut escaped = String::new();
+    for ch in input.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\" & return & \""),
+            '\r' => {}
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+#[tauri::command]
+fn type_text_to_focused_app(text: String) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("type_text_to_focused_app is currently only supported on macOS".into());
+    }
+    if !macos_is_accessibility_trusted() {
+        return Err("accessibility permission not granted".into());
+    }
+
+    let script = format!(
+        "tell application \"System Events\" to keystroke \"{}\"",
+        escape_applescript_text(&text)
+    );
+    let status = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status()
+        .map_err(|e| format!("failed to run osascript: {e}"))?;
+    if !status.success() {
+        return Err("failed to type text via System Events".into());
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcuts([HOTKEY_TOGGLE_DICTATION, HOTKEY_INSERT_TEXT])
+                .expect("failed to configure global shortcuts")
+                .with_handler(|app, shortcut, event: ShortcutEvent| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    let action = if shortcut.to_string() == HOTKEY_TOGGLE_DICTATION {
+                        "toggle-dictation"
+                    } else if shortcut.to_string() == HOTKEY_INSERT_TEXT {
+                        "insert-transcript"
+                    } else {
+                        return;
+                    };
+                    let _ = app.emit(
+                        HOTKEY_EVENT,
+                        GlobalShortcutPayload {
+                            action: action.to_string(),
+                            shortcut: shortcut.to_string(),
+                        },
+                    );
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let manager = app.global_shortcut();
+            if !manager.is_registered(HOTKEY_TOGGLE_DICTATION) {
+                manager
+                    .register(HOTKEY_TOGGLE_DICTATION)
+                    .map_err(|e| format!("failed to register toggle shortcut: {e}"))?;
+            }
+            if !manager.is_registered(HOTKEY_INSERT_TEXT) {
+                manager
+                    .register(HOTKEY_INSERT_TEXT)
+                    .map_err(|e| format!("failed to register insert shortcut: {e}"))?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             check_model_status,
             get_model_init_status,
@@ -744,7 +918,11 @@ pub fn run() {
             get_recording_cached_transcript,
             transcribe_recording,
             save_recording_and_transcribe,
-            open_temp_dir
+            open_temp_dir,
+            get_accessibility_status,
+            request_accessibility_permission,
+            open_accessibility_settings,
+            type_text_to_focused_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

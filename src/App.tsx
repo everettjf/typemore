@@ -13,6 +13,8 @@ import {
   Plus,
   RefreshCcw,
   Settings,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Trash2,
   X,
@@ -44,9 +46,22 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, 
 type Page = "home" | "history" | "dictionary";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
+type OverlayPhase = "hidden" | "listening" | "thinking" | "ready";
+
+type AccessibilityStatus = {
+  supported: boolean;
+  trusted: boolean;
+};
+
+type GlobalShortcutPayload = {
+  action: "toggle-dictation" | "insert-transcript";
+  shortcut: string;
+};
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
+const HOTKEY_TOGGLE = "Cmd/Ctrl + Shift + Space";
+const HOTKEY_INSERT = "Cmd/Ctrl + Shift + Enter";
 
 const I18N = {
   zh: {
@@ -92,10 +107,23 @@ const I18N = {
     settingsOpenTempDir: "打开临时目录",
     settingsLanguageTitle: "语言",
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
+    settingsHotkeyTitle: "全局快捷键",
+    settingsHotkeyDesc: "在任意应用内唤起语音输入与插入文本。",
+    settingsHotkeyToggle: "唤起/结束语音输入",
+    settingsHotkeyInsert: "将最新识别结果输入到当前输入框",
     languageModeLabel: "界面语言",
     langAuto: "自动（跟随系统）",
     langZh: "中文",
     langEn: "English",
+    accessTitle: "辅助功能权限",
+    accessNeed: "要在任意应用中输入文字，请先授予 macOS 辅助功能权限。",
+    accessGranted: "权限已开启，可向其他应用输入文字。",
+    accessRequest: "请求权限",
+    accessOpenSettings: "打开系统设置",
+    accessRefresh: "刷新状态",
+    overlayListening: "正在听...",
+    overlayThinking: "识别中...",
+    overlayReady: "就绪，可按快捷键输入",
     recordingPrefix: "录音",
     transcriptInitFailed: "初始化失败: {error}",
     transcriptListenFailed: "监听模型进度失败: {error}",
@@ -110,6 +138,8 @@ const I18N = {
     transcriptDeleteFailed: "删除失败: {error}",
     transcriptOpenTempDirOk: "已打开临时目录: {dir}",
     transcriptOpenTempDirFailed: "打开临时目录失败: {error}",
+    transcriptTypeOk: "已尝试输入最新识别结果。",
+    transcriptTypeFailed: "输入到当前应用失败: {error}",
   },
   en: {
     navHome: "Home",
@@ -154,10 +184,23 @@ const I18N = {
     settingsOpenTempDir: "Open Temporary Directory",
     settingsLanguageTitle: "Language",
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
+    settingsHotkeyTitle: "Global Hotkeys",
+    settingsHotkeyDesc: "Trigger dictation and insert text from any app.",
+    settingsHotkeyToggle: "Start/stop dictation",
+    settingsHotkeyInsert: "Insert latest transcript into focused input",
     languageModeLabel: "Interface language",
     langAuto: "Auto (System)",
     langZh: "Chinese",
     langEn: "English",
+    accessTitle: "Accessibility Permission",
+    accessNeed: "To type into any app, please grant macOS Accessibility permission.",
+    accessGranted: "Permission granted. You can type into other apps.",
+    accessRequest: "Request Permission",
+    accessOpenSettings: "Open System Settings",
+    accessRefresh: "Refresh",
+    overlayListening: "Listening...",
+    overlayThinking: "Thinking...",
+    overlayReady: "Ready. Press hotkey to insert",
     recordingPrefix: "recording",
     transcriptInitFailed: "Initialization failed: {error}",
     transcriptListenFailed: "Failed to listen model progress: {error}",
@@ -172,6 +215,8 @@ const I18N = {
     transcriptDeleteFailed: "Delete failed: {error}",
     transcriptOpenTempDirOk: "Opened temporary directory: {dir}",
     transcriptOpenTempDirFailed: "Failed to open temporary directory: {error}",
+    transcriptTypeOk: "Attempted to type latest transcript.",
+    transcriptTypeFailed: "Failed to type into focused app: {error}",
   },
 } as const;
 
@@ -187,10 +232,7 @@ function detectSystemLang(): UiLang {
   return lang.startsWith("zh") ? "zh" : "en";
 }
 
-function localizedInitMessage(
-  status: ModelInitStatus,
-  uiLang: UiLang
-) {
+function localizedInitMessage(status: ModelInitStatus, uiLang: UiLang) {
   if (uiLang === "zh") {
     return status.message;
   }
@@ -211,7 +253,7 @@ function localizedInitMessage(
     return status.error ?? "Model initialization failed";
   }
   if (status.phase === "download") {
-    const match = status.message.match(/([0-9]+(?:\\.[0-9]+)?)%\\s*\\(([^)]+)\\)/);
+    const match = status.message.match(/([0-9]+(?:\.[0-9]+)?)%\s*\(([^)]+)\)/);
     if (match) {
       return `Downloading model... ${match[1]}% (${match[2]})`;
     }
@@ -246,6 +288,10 @@ function App() {
     return raw === "zh-CN" || raw === "en-US" || raw === "auto" ? raw : "auto";
   });
 
+  const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
+  const [overlayPhase, setOverlayPhase] = useState<OverlayPhase>("hidden");
+  const [overlayText, setOverlayText] = useState("");
+
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
@@ -253,6 +299,8 @@ function App() {
   const levelAudioCtxRef = useRef<AudioContext | null>(null);
   const levelAnalyserRef = useRef<AnalyserNode | null>(null);
   const levelRafRef = useRef<number | null>(null);
+  const overlayTimerRef = useRef<number | null>(null);
+  const recordingByHotkeyRef = useRef(false);
 
   const selected = useMemo(
     () => recordings.find((item) => item.id === selectedId) ?? null,
@@ -295,6 +343,21 @@ function App() {
     [levelHistory]
   );
 
+  function showOverlay(phase: OverlayPhase, text = "", autoHideMs?: number) {
+    if (overlayTimerRef.current != null) {
+      window.clearTimeout(overlayTimerRef.current);
+      overlayTimerRef.current = null;
+    }
+    setOverlayPhase(phase);
+    setOverlayText(text);
+    if (autoHideMs && autoHideMs > 0) {
+      overlayTimerRef.current = window.setTimeout(() => {
+        setOverlayPhase("hidden");
+        setOverlayText("");
+      }, autoHideMs);
+    }
+  }
+
   async function loadRecordings() {
     const items = await invoke<RecordingItem[]>("list_recordings");
     setRecordings(items);
@@ -304,6 +367,15 @@ function App() {
   async function loadInitStatus() {
     const status = await invoke<ModelInitStatus>("get_model_init_status");
     setInitStatus(status);
+  }
+
+  async function refreshAccessibilityStatus() {
+    try {
+      const status = await invoke<AccessibilityStatus>("get_accessibility_status");
+      setAccessibility(status);
+    } catch {
+      setAccessibility({ supported: false, trusted: false });
+    }
   }
 
   useEffect(() => {
@@ -330,24 +402,47 @@ function App() {
   }, [langMode]);
 
   useEffect(() => {
-    Promise.all([loadRecordings(), loadInitStatus()]).catch((err) => {
+    Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus()]).catch((err) => {
       setTranscript(t("transcriptInitFailed", { error: String(err) }));
     });
 
-    let unlisten: (() => void) | undefined;
+    let unlistenInit: (() => void) | undefined;
+    let unlistenHotkey: (() => void) | undefined;
+
     listen<ModelInitStatus>("model-init-progress", (event) => {
       setInitStatus(event.payload);
     })
       .then((fn) => {
-        unlisten = fn;
+        unlistenInit = fn;
+      })
+      .catch((err) => {
+        setTranscript(t("transcriptListenFailed", { error: String(err) }));
+      });
+
+    listen<GlobalShortcutPayload>("global-shortcut-triggered", (event) => {
+      const { action } = event.payload;
+      if (action === "toggle-dictation") {
+        void onHotkeyToggleDictation();
+      } else if (action === "insert-transcript") {
+        void onHotkeyInsertTranscript();
+      }
+    })
+      .then((fn) => {
+        unlistenHotkey = fn;
       })
       .catch((err) => {
         setTranscript(t("transcriptListenFailed", { error: String(err) }));
       });
 
     return () => {
-      if (unlisten) {
-        unlisten();
+      if (unlistenInit) {
+        unlistenInit();
+      }
+      if (unlistenHotkey) {
+        unlistenHotkey();
+      }
+      if (overlayTimerRef.current != null) {
+        window.clearTimeout(overlayTimerRef.current);
       }
     };
   }, [t]);
@@ -477,11 +572,20 @@ function App() {
 
         setRecordings((prev) => [result.recording, ...prev]);
         setSelectedId(result.recording.id);
-        setTranscript(result.text || "(empty)");
-        setPage("history");
+        setTranscript(result.text || "");
+
+        if (recordingByHotkeyRef.current) {
+          showOverlay("ready", result.text || t("overlayReady"), 2400);
+        } else {
+          setPage("history");
+        }
       } catch (err) {
         setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
+        if (recordingByHotkeyRef.current) {
+          showOverlay("ready", t("transcriptRecordingFailed", { error: String(err) }), 2400);
+        }
       } finally {
+        recordingByHotkeyRef.current = false;
         setIsBusy(false);
       }
     };
@@ -510,11 +614,51 @@ function App() {
       return;
     }
     try {
+      recordingByHotkeyRef.current = false;
       await startRecording();
     } catch (err) {
-      setTranscript(`Mic access failed: ${String(err)}`);
+      setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
       stopLevelMonitor();
     }
+  }
+
+  async function onHotkeyToggleDictation() {
+    if (isRecording) {
+      showOverlay("thinking", t("overlayThinking"));
+      stopRecording();
+      return;
+    }
+    if (!modelReady) {
+      setTranscript(t("transcriptNeedInit"));
+      showOverlay("ready", t("transcriptNeedInit"), 2000);
+      return;
+    }
+    try {
+      recordingByHotkeyRef.current = true;
+      await startRecording();
+      showOverlay("listening", t("overlayListening"));
+    } catch (err) {
+      setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
+      showOverlay("ready", t("transcriptRecordingFailed", { error: String(err) }), 2400);
+      stopLevelMonitor();
+    }
+  }
+
+  async function onTypeTranscriptToFocusedApp() {
+    if (!transcript.trim()) {
+      return;
+    }
+    try {
+      await invoke("type_text_to_focused_app", { text: transcript });
+      setTranscript(t("transcriptTypeOk"));
+    } catch (err) {
+      setTranscript(t("transcriptTypeFailed", { error: String(err) }));
+    }
+  }
+
+  async function onHotkeyInsertTranscript() {
+    await onTypeTranscriptToFocusedApp();
+    showOverlay("ready", t("overlayReady"), 1800);
   }
 
   async function onRetranscribeSelected() {
@@ -528,7 +672,7 @@ function App() {
         id: selected.id,
         force: true,
       });
-      setTranscript(text || "(empty)");
+      setTranscript(text || "");
     } catch (err) {
       setTranscript(t("transcriptRetryFailed", { error: String(err) }));
     } finally {
@@ -591,6 +735,23 @@ function App() {
       setTranscript(t("transcriptOpenTempDirOk", { dir }));
     } catch (err) {
       setTranscript(t("transcriptOpenTempDirFailed", { error: String(err) }));
+    }
+  }
+
+  async function onRequestAccessibilityPermission() {
+    try {
+      const status = await invoke<AccessibilityStatus>("request_accessibility_permission");
+      setAccessibility(status);
+    } catch {
+      await refreshAccessibilityStatus();
+    }
+  }
+
+  async function onOpenAccessibilitySettings() {
+    try {
+      await invoke("open_accessibility_settings");
+    } catch (err) {
+      setTranscript(String(err));
     }
   }
 
@@ -662,7 +823,7 @@ function App() {
 
         <section className="min-h-0 overflow-hidden rounded-2xl border border-slate-200/80 bg-white/95 p-4 md:p-5">
           {page === "home" && (
-            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_auto_1fr]">
+            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_auto_auto_1fr]">
               <header className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h1 className="text-3xl font-semibold tracking-tight">{t("titleHome")}</h1>
@@ -677,6 +838,27 @@ function App() {
                   {modelReady ? t("modelReady") : initStatus.running ? t("modelInitializing") : t("modelNotReady")}
                 </Badge>
               </header>
+
+              {accessibility.supported && (
+                <Card className="p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="inline-flex items-center gap-2 text-base font-semibold text-slate-800">
+                        {accessibility.trusted ? <ShieldCheck size={18} className="text-emerald-600" /> : <ShieldAlert size={18} className="text-amber-600" />}
+                        {t("accessTitle")}
+                      </div>
+                      <p className="mt-1 text-sm text-slate-600">
+                        {accessibility.trusted ? t("accessGranted") : t("accessNeed")}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" onClick={onRequestAccessibilityPermission}>{t("accessRequest")}</Button>
+                      <Button variant="outline" onClick={onOpenAccessibilitySettings}>{t("accessOpenSettings")}</Button>
+                      <Button variant="outline" onClick={refreshAccessibilityStatus}>{t("accessRefresh")}</Button>
+                    </div>
+                  </div>
+                </Card>
+              )}
 
               <Card className="p-4">
                 <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -708,9 +890,7 @@ function App() {
                     {initStatus.running ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
                     {initStatus.running ? t("initModelRunning") : modelReady ? t("initModelReady") : t("initModelStart")}
                   </Button>
-                  <Button variant="outline" onClick={() => setPage("history")}>
-                    {t("viewHistory")}
-                  </Button>
+                  <Button variant="outline" onClick={() => setPage("history")}>{t("viewHistory")}</Button>
                 </div>
 
                 <div className="space-y-2">
@@ -719,6 +899,11 @@ function App() {
                   </div>
                   <Progress value={Math.min(100, Math.max(0, initStatus.progress))} />
                   {initStatus.error && <div className="text-xs text-red-600">{initStatus.error}</div>}
+                </div>
+
+                <div className="mt-4 grid gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600 md:grid-cols-2">
+                  <div>{t("settingsHotkeyToggle")}: <span className="font-semibold text-slate-800">{HOTKEY_TOGGLE}</span></div>
+                  <div>{t("settingsHotkeyInsert")}: <span className="font-semibold text-slate-800">{HOTKEY_INSERT}</span></div>
                 </div>
               </Card>
 
@@ -935,6 +1120,15 @@ function App() {
                 </Card>
 
                 <Card className="p-4">
+                  <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
+                  <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
+                  <div className="mt-3 space-y-1 text-sm text-slate-700">
+                    <div>{t("settingsHotkeyToggle")}: <span className="font-semibold">{HOTKEY_TOGGLE}</span></div>
+                    <div>{t("settingsHotkeyInsert")}: <span className="font-semibold">{HOTKEY_INSERT}</span></div>
+                  </div>
+                </Card>
+
+                <Card className="p-4">
                   <div className="text-lg font-semibold text-slate-900">{t("settingsTempDirTitle")}</div>
                   <p className="mt-1 text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
                   <div className="mt-4">
@@ -946,6 +1140,30 @@ function App() {
                 </Card>
               </div>
             </section>
+          </div>
+        </div>
+      )}
+
+      {overlayPhase !== "hidden" && (
+        <div className="pointer-events-none fixed left-1/2 top-6 z-50 -translate-x-1/2">
+          <div className="min-w-[300px] rounded-full border border-white/20 bg-black/85 px-5 py-3 text-white shadow-2xl backdrop-blur">
+            <div className="flex items-center justify-between gap-4">
+              <div className="text-xl font-semibold">
+                {overlayPhase === "listening" ? t("overlayListening") : overlayPhase === "thinking" ? t("overlayThinking") : t("overlayReady")}
+              </div>
+              {overlayPhase === "listening" && (
+                <div className="flex items-center gap-1">
+                  <span className="h-2 w-1 rounded-full bg-white animate-pulse" />
+                  <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
+                  <span className="h-6 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
+                  <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
+                  <span className="h-2 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
+                </div>
+              )}
+            </div>
+            {overlayText && overlayPhase !== "listening" && (
+              <div className="mt-1 max-w-[420px] truncate text-sm text-white/80">{overlayText}</div>
+            )}
           </div>
         </div>
       )}
