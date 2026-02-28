@@ -758,7 +758,17 @@ fn open_temp_dir(app: AppHandle) -> Result<String, String> {
 #[cfg(target_os = "macos")]
 fn macos_is_accessibility_trusted() -> bool {
     // SAFETY: AXIsProcessTrusted is a pure system query function.
-    unsafe { AXIsProcessTrusted() }
+    let ax_trusted = unsafe { AXIsProcessTrusted() };
+    if !ax_trusted {
+        return false;
+    }
+    // Additional runtime probe: verify we can actually talk to System Events.
+    // This avoids false positives where AX trust appears true but automation still fails.
+    let probe = Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to get name of first process whose frontmost is true")
+        .status();
+    matches!(probe, Ok(status) if status.success())
 }
 
 #[cfg(not(target_os = "macos"))]
