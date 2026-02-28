@@ -1233,7 +1233,13 @@ function MainApp() {
                             placeholder={t("settingsHotkeyTogglePlaceholder")}
                             className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
                           />
-                          <Button variant="outline" type="button" onClick={() => setCaptureTarget("toggle")} disabled={savingHotkeys}>
+                          <Button
+                            variant="outline"
+                            type="button"
+                            className="h-10 min-w-[96px] justify-center whitespace-nowrap"
+                            onClick={() => setCaptureTarget("toggle")}
+                            disabled={savingHotkeys}
+                          >
                             {captureTarget === "toggle" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
                           </Button>
                         </div>

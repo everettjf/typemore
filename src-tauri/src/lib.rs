@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use serde::{Deserialize, Serialize};
 use sherpa_rs::{paraformer::ParaformerConfig, paraformer::ParaformerRecognizer};
 use std::{
@@ -122,6 +124,12 @@ struct HotkeySettings {
     toggle: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedHotkeySettings {
+    toggle: String,
+}
+
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct OverlayStatePayload {
@@ -163,6 +171,28 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map_err(|e| format!("failed to resolve app data dir: {e}"))
+}
+
+fn hotkey_settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("hotkeys.json"))
+}
+
+fn load_persisted_hotkeys(app: &AppHandle) -> Result<Option<PersistedHotkeySettings>, String> {
+    let path = hotkey_settings_file(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| format!("failed to read hotkey settings: {e}"))?;
+    let parsed = serde_json::from_str::<PersistedHotkeySettings>(&raw)
+        .map_err(|e| format!("failed to parse hotkey settings: {e}"))?;
+    Ok(Some(parsed))
+}
+
+fn save_persisted_hotkeys(app: &AppHandle, settings: &PersistedHotkeySettings) -> Result<(), String> {
+    let path = hotkey_settings_file(app)?;
+    let raw = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("failed to serialize hotkey settings: {e}"))?;
+    fs::write(path, raw).map_err(|e| format!("failed to write hotkey settings: {e}"))
 }
 
 fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1053,6 +1083,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
     .map_err(|e| format!("failed to create overlay window: {e}"))?;
 
     #[cfg(target_os = "macos")]
+    #[allow(unexpected_cfgs)]
     {
         use objc::{msg_send, sel, sel_impl};
         let ns_window_ptr = overlay
@@ -1135,6 +1166,13 @@ fn set_global_shortcuts(app: AppHandle, toggle: String) -> Result<HotkeySettings
         *lock = new_config.clone();
     }
 
+    save_persisted_hotkeys(
+        &app,
+        &PersistedHotkeySettings {
+            toggle: new_config.toggle.clone(),
+        },
+    )?;
+
     Ok(HotkeySettings {
         toggle: new_config.toggle,
     })
@@ -1185,14 +1223,40 @@ pub fn run() {
         .setup(|app| {
             let manager = app.global_shortcut();
             let state = app.state::<AppState>();
-            let lock = state
+            let default_lock = state
                 .hotkeys
                 .lock()
                 .map_err(|_| "failed to read hotkeys at setup".to_string())?;
-            if !manager.is_registered(lock.toggle.as_str()) {
+            if !manager.is_registered(default_lock.toggle.as_str()) {
                 manager
-                    .register(lock.toggle.as_str())
+                    .register(default_lock.toggle.as_str())
                     .map_err(|e| format!("failed to register toggle shortcut: {e}"))?;
+            }
+            drop(default_lock);
+
+            if let Some(saved) = load_persisted_hotkeys(app.handle())? {
+                if let Ok(saved_cfg) = build_hotkey_config(&saved.toggle) {
+                    let old_toggle = {
+                        let lock = state
+                            .hotkeys
+                            .lock()
+                            .map_err(|_| "failed to read current hotkeys at setup".to_string())?;
+                        lock.toggle.clone()
+                    };
+                    if old_toggle != saved_cfg.toggle {
+                        if manager.is_registered(old_toggle.as_str()) {
+                            let _ = manager.unregister(old_toggle.as_str());
+                        }
+                        manager
+                            .register(saved_cfg.toggle.as_str())
+                            .map_err(|e| format!("failed to register saved toggle shortcut: {e}"))?;
+                        let mut lock = state
+                            .hotkeys
+                            .lock()
+                            .map_err(|_| "failed to apply saved hotkeys at setup".to_string())?;
+                        *lock = saved_cfg;
+                    }
+                }
             }
             let _ = ensure_overlay_window(app.handle());
             Ok(())
