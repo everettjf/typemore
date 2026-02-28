@@ -104,9 +104,37 @@ impl Default for ModelInitStatus {
     }
 }
 
-#[derive(Default)]
 struct AppState {
     init_status: Mutex<ModelInitStatus>,
+    hotkeys: Mutex<HotkeyConfig>,
+}
+
+#[derive(Debug, Clone)]
+struct HotkeyConfig {
+    toggle: String,
+    insert: String,
+    toggle_id: u32,
+    insert_id: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HotkeySettings {
+    toggle: String,
+    insert: String,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            init_status: Mutex::new(ModelInitStatus::default()),
+            hotkeys: Mutex::new(build_hotkey_config(
+                HOTKEY_TOGGLE_DICTATION,
+                HOTKEY_INSERT_TEXT,
+            )
+            .expect("invalid default hotkeys")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,6 +145,24 @@ struct CachedTranscript {
 }
 
 type TranscriptCacheMap = HashMap<String, CachedTranscript>;
+
+fn build_hotkey_config(toggle: &str, insert: &str) -> Result<HotkeyConfig, String> {
+    let toggle_shortcut: tauri_plugin_global_shortcut::Shortcut = toggle
+        .parse()
+        .map_err(|e| format!("invalid toggle shortcut: {e}"))?;
+    let insert_shortcut: tauri_plugin_global_shortcut::Shortcut = insert
+        .parse()
+        .map_err(|e| format!("invalid insert shortcut: {e}"))?;
+    if toggle_shortcut.id() == insert_shortcut.id() {
+        return Err("toggle and insert shortcuts cannot be the same".into());
+    }
+    Ok(HotkeyConfig {
+        toggle: toggle.to_string(),
+        insert: insert.to_string(),
+        toggle_id: toggle_shortcut.id(),
+        insert_id: insert_shortcut.id(),
+    })
+}
 
 fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -986,30 +1032,89 @@ fn type_text_to_focused_app(text: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
+    let state = app.state::<AppState>();
+    let lock = state
+        .hotkeys
+        .lock()
+        .map_err(|_| "failed to read hotkey settings".to_string())?;
+    Ok(HotkeySettings {
+        toggle: lock.toggle.clone(),
+        insert: lock.insert.clone(),
+    })
+}
+
+#[tauri::command]
+fn set_global_shortcuts(app: AppHandle, toggle: String, insert: String) -> Result<HotkeySettings, String> {
+    let new_config = build_hotkey_config(&toggle, &insert)?;
+    let state = app.state::<AppState>();
+
+    let old_config = {
+        let lock = state
+            .hotkeys
+            .lock()
+            .map_err(|_| "failed to read current hotkeys".to_string())?;
+        lock.clone()
+    };
+
+    let manager = app.global_shortcut();
+    if manager.is_registered(old_config.toggle.as_str()) {
+        manager
+            .unregister(old_config.toggle.as_str())
+            .map_err(|e| format!("failed to unregister old toggle shortcut: {e}"))?;
+    }
+    if manager.is_registered(old_config.insert.as_str()) {
+        manager
+            .unregister(old_config.insert.as_str())
+            .map_err(|e| format!("failed to unregister old insert shortcut: {e}"))?;
+    }
+
+    if let Err(e) = manager.register(new_config.toggle.as_str()) {
+        let _ = manager.register(old_config.toggle.as_str());
+        let _ = manager.register(old_config.insert.as_str());
+        return Err(format!("failed to register toggle shortcut: {e}"));
+    }
+    if let Err(e) = manager.register(new_config.insert.as_str()) {
+        let _ = manager.unregister(new_config.toggle.as_str());
+        let _ = manager.register(old_config.toggle.as_str());
+        let _ = manager.register(old_config.insert.as_str());
+        return Err(format!("failed to register insert shortcut: {e}"));
+    }
+
+    {
+        let mut lock = state
+            .hotkeys
+            .lock()
+            .map_err(|_| "failed to update hotkey settings".to_string())?;
+        *lock = new_config.clone();
+    }
+
+    Ok(HotkeySettings {
+        toggle: new_config.toggle,
+        insert: new_config.insert,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let toggle_shortcut: tauri_plugin_global_shortcut::Shortcut = HOTKEY_TOGGLE_DICTATION
-        .parse()
-        .expect("invalid HOTKEY_TOGGLE_DICTATION");
-    let insert_shortcut: tauri_plugin_global_shortcut::Shortcut = HOTKEY_INSERT_TEXT
-        .parse()
-        .expect("invalid HOTKEY_INSERT_TEXT");
-    let toggle_shortcut_id = toggle_shortcut.id();
-    let insert_shortcut_id = insert_shortcut.id();
-
     tauri::Builder::default()
         .manage(AppState::default())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_shortcuts([HOTKEY_TOGGLE_DICTATION, HOTKEY_INSERT_TEXT])
                 .expect("failed to configure global shortcuts")
-                .with_handler(move |app, shortcut, event: ShortcutEvent| {
+                .with_handler(|app, shortcut, event: ShortcutEvent| {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    let action = if shortcut.id() == toggle_shortcut_id {
+                    let state = app.state::<AppState>();
+                    let Ok(lock) = state.hotkeys.lock() else {
+                        return;
+                    };
+                    let action = if shortcut.id() == lock.toggle_id {
                         "toggle-dictation"
-                    } else if shortcut.id() == insert_shortcut_id {
+                    } else if shortcut.id() == lock.insert_id {
                         "insert-transcript"
                     } else {
                         return;
@@ -1027,14 +1132,19 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let manager = app.global_shortcut();
-            if !manager.is_registered(HOTKEY_TOGGLE_DICTATION) {
+            let state = app.state::<AppState>();
+            let lock = state
+                .hotkeys
+                .lock()
+                .map_err(|_| "failed to read hotkeys at setup".to_string())?;
+            if !manager.is_registered(lock.toggle.as_str()) {
                 manager
-                    .register(HOTKEY_TOGGLE_DICTATION)
+                    .register(lock.toggle.as_str())
                     .map_err(|e| format!("failed to register toggle shortcut: {e}"))?;
             }
-            if !manager.is_registered(HOTKEY_INSERT_TEXT) {
+            if !manager.is_registered(lock.insert.as_str()) {
                 manager
-                    .register(HOTKEY_INSERT_TEXT)
+                    .register(lock.insert.as_str())
                     .map_err(|e| format!("failed to register insert shortcut: {e}"))?;
             }
             Ok(())
@@ -1053,7 +1163,9 @@ pub fn run() {
             get_accessibility_status,
             request_accessibility_permission,
             open_accessibility_settings,
-            type_text_to_focused_app
+            type_text_to_focused_app,
+            get_global_shortcuts,
+            set_global_shortcuts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

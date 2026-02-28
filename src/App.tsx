@@ -61,10 +61,15 @@ type GlobalShortcutPayload = {
   shortcut: string;
 };
 
+type HotkeySettings = {
+  toggle: string;
+  insert: string;
+};
+
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
-const HOTKEY_TOGGLE = "Cmd/Ctrl + Option/Alt + Space";
-const HOTKEY_INSERT = "Cmd/Ctrl + Option/Alt + Enter";
+const DEFAULT_HOTKEY_TOGGLE = "CommandOrControl+Alt+Space";
+const DEFAULT_HOTKEY_INSERT = "CommandOrControl+Alt+Enter";
 
 const I18N = {
   zh: {
@@ -114,6 +119,10 @@ const I18N = {
     settingsHotkeyDesc: "在任意应用内唤起语音输入与插入文本。",
     settingsHotkeyToggle: "唤起/结束语音输入",
     settingsHotkeyInsert: "将最新识别结果输入到当前输入框",
+    settingsHotkeyTogglePlaceholder: "例如: CommandOrControl+Alt+Space",
+    settingsHotkeyInsertPlaceholder: "例如: CommandOrControl+Alt+Enter",
+    settingsHotkeySave: "保存快捷键",
+    settingsHotkeyReset: "恢复默认",
     languageModeLabel: "界面语言",
     langAuto: "自动（跟随系统）",
     langZh: "中文",
@@ -191,6 +200,10 @@ const I18N = {
     settingsHotkeyDesc: "Trigger dictation and insert text from any app.",
     settingsHotkeyToggle: "Start/stop dictation",
     settingsHotkeyInsert: "Insert latest transcript into focused input",
+    settingsHotkeyTogglePlaceholder: "e.g. CommandOrControl+Alt+Space",
+    settingsHotkeyInsertPlaceholder: "e.g. CommandOrControl+Alt+Enter",
+    settingsHotkeySave: "Save hotkeys",
+    settingsHotkeyReset: "Reset default",
     languageModeLabel: "Interface language",
     langAuto: "Auto (System)",
     langZh: "Chinese",
@@ -294,6 +307,9 @@ function App() {
   const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
   const [overlayPhase, setOverlayPhase] = useState<OverlayPhase>("hidden");
   const [overlayText, setOverlayText] = useState("");
+  const [hotkeyToggle, setHotkeyToggle] = useState(DEFAULT_HOTKEY_TOGGLE);
+  const [hotkeyInsert, setHotkeyInsert] = useState(DEFAULT_HOTKEY_INSERT);
+  const [savingHotkeys, setSavingHotkeys] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -372,6 +388,12 @@ function App() {
     setInitStatus(status);
   }
 
+  async function loadGlobalShortcuts() {
+    const settings = await invoke<HotkeySettings>("get_global_shortcuts");
+    setHotkeyToggle(settings.toggle);
+    setHotkeyInsert(settings.insert);
+  }
+
   async function refreshAccessibilityStatus() {
     try {
       const status = await invoke<AccessibilityStatus>("get_accessibility_status");
@@ -405,7 +427,7 @@ function App() {
   }, [langMode]);
 
   useEffect(() => {
-    Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus()]).catch((err) => {
+    Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus(), loadGlobalShortcuts()]).catch((err) => {
       setTranscript(t("transcriptInitFailed", { error: String(err) }));
     });
 
@@ -758,6 +780,42 @@ function App() {
     }
   }
 
+  async function onSaveHotkeys() {
+    const toggle = hotkeyToggle.trim();
+    const insert = hotkeyInsert.trim();
+    if (!toggle || !insert) {
+      return;
+    }
+    setSavingHotkeys(true);
+    try {
+      const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle, insert });
+      setHotkeyToggle(next.toggle);
+      setHotkeyInsert(next.insert);
+    } catch (err) {
+      setTranscript(String(err));
+    } finally {
+      setSavingHotkeys(false);
+    }
+  }
+
+  async function onResetHotkeys() {
+    setHotkeyToggle(DEFAULT_HOTKEY_TOGGLE);
+    setHotkeyInsert(DEFAULT_HOTKEY_INSERT);
+    setSavingHotkeys(true);
+    try {
+      const next = await invoke<HotkeySettings>("set_global_shortcuts", {
+        toggle: DEFAULT_HOTKEY_TOGGLE,
+        insert: DEFAULT_HOTKEY_INSERT,
+      });
+      setHotkeyToggle(next.toggle);
+      setHotkeyInsert(next.insert);
+    } catch (err) {
+      setTranscript(String(err));
+    } finally {
+      setSavingHotkeys(false);
+    }
+  }
+
   function addDictionaryWord() {
     const word = newWord.trim();
     if (!word) {
@@ -912,8 +970,8 @@ function App() {
                 </div>
 
                 <div className="mt-4 grid gap-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600 md:grid-cols-2">
-                  <div>{t("settingsHotkeyToggle")}: <span className="font-semibold text-slate-800">{HOTKEY_TOGGLE}</span></div>
-                  <div>{t("settingsHotkeyInsert")}: <span className="font-semibold text-slate-800">{HOTKEY_INSERT}</span></div>
+                  <div>{t("settingsHotkeyToggle")}: <span className="font-semibold text-slate-800">{hotkeyToggle}</span></div>
+                  <div>{t("settingsHotkeyInsert")}: <span className="font-semibold text-slate-800">{hotkeyInsert}</span></div>
                 </div>
               </Card>
 
@@ -1132,9 +1190,34 @@ function App() {
                 <Card className="p-4">
                   <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
                   <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
-                  <div className="mt-3 space-y-1 text-sm text-slate-700">
-                    <div>{t("settingsHotkeyToggle")}: <span className="font-semibold">{HOTKEY_TOGGLE}</span></div>
-                    <div>{t("settingsHotkeyInsert")}: <span className="font-semibold">{HOTKEY_INSERT}</span></div>
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyToggle")}</label>
+                      <input
+                        value={hotkeyToggle}
+                        onChange={(event) => setHotkeyToggle(event.target.value)}
+                        placeholder={t("settingsHotkeyTogglePlaceholder")}
+                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyInsert")}</label>
+                      <input
+                        value={hotkeyInsert}
+                        onChange={(event) => setHotkeyInsert(event.target.value)}
+                        placeholder={t("settingsHotkeyInsertPlaceholder")}
+                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys}>
+                        {savingHotkeys ? <Loader2 size={14} className="animate-spin" /> : null}
+                        {t("settingsHotkeySave")}
+                      </Button>
+                      <Button variant="outline" onClick={onResetHotkeys} disabled={savingHotkeys}>
+                        {t("settingsHotkeyReset")}
+                      </Button>
+                    </div>
                   </div>
                 </Card>
 
