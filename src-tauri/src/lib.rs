@@ -1182,6 +1182,19 @@ fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Res
         let _ = overlay.show();
         let _ = overlay.set_always_on_top(true);
         let _ = overlay.set_visible_on_all_workspaces(true);
+
+        #[cfg(target_os = "macos")]
+        #[allow(unexpected_cfgs)]
+        {
+            use objc::{msg_send, sel, sel_impl};
+            if let Ok(ns_window_ptr) = overlay.ns_window() {
+                let ns_window = ns_window_ptr as *mut objc::runtime::Object;
+                unsafe {
+                    // Keep overlay visible even when the app is not frontmost.
+                    let _: () = msg_send![ns_window, orderFrontRegardless];
+                }
+            }
+        }
     }
 
     overlay
