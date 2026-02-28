@@ -1247,7 +1247,7 @@ function App() {
               </div>
             </aside>
 
-            <section className="flex min-h-0 flex-col">
+            <section className="flex min-h-0 flex-col overflow-hidden">
               <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
                 <h2 className="text-3xl font-semibold tracking-tight">{t("settingsTitle")}</h2>
                 <Button variant="outline" className="h-9 w-9 justify-center p-0" onClick={() => setSettingsOpen(false)}>
@@ -1255,7 +1255,8 @@ function App() {
                 </Button>
               </div>
 
-              <div className="space-y-4 p-6">
+              <div className="min-h-0 flex-1 overflow-y-auto p-6">
+                <div className="space-y-4 pb-2">
                 <Card className="p-4">
                   <div className="text-lg font-semibold text-slate-900">{t("settingsLanguageTitle")}</div>
                   <p className="mt-1 text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
@@ -1338,6 +1339,7 @@ function App() {
                     </Button>
                   </div>
                 </Card>
+                </div>
               </div>
             </section>
           </div>
