@@ -311,16 +311,16 @@ function OverlayWindowApp() {
 
   const title = phase === "listening" ? "正在听..." : phase === "thinking" ? "识别中..." : "就绪";
   return (
-    <main className="h-screen w-screen bg-transparent p-2">
-      <div className="mx-auto mt-0 w-[420px] rounded-2xl border border-white/20 bg-black/90 px-5 py-3 text-white shadow-2xl">
+    <main className="h-screen w-screen bg-transparent p-0">
+      <div className="h-full w-full overflow-hidden rounded-xl border border-white/20 bg-black/90 px-3 py-2 text-white shadow-2xl">
         <div className="flex items-center justify-between gap-4">
           <div className="text-xs font-semibold tracking-tight leading-none">{title}</div>
           {phase === "listening" && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <span className="h-2.5 w-1 rounded-full bg-white animate-pulse" />
-              <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
-              <span className="h-5 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
-              <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
+              <span className="h-3.5 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
+              <span className="h-4 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
+              <span className="h-3.5 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
               <span className="h-2.5 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
             </div>
           )}

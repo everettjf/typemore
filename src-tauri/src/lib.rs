@@ -27,8 +27,8 @@ const HOTKEY_EVENT: &str = "global-shortcut-triggered";
 const OVERLAY_EVENT: &str = "overlay-state";
 const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Alt+Space";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
-const OVERLAY_WIDTH: f64 = 420.0;
-const OVERLAY_HEIGHT: f64 = 88.0;
+const OVERLAY_WIDTH: f64 = 210.0;
+const OVERLAY_HEIGHT: f64 = 59.0;
 const OVERLAY_BOTTOM_MARGIN: i32 = 96;
 
 #[cfg(target_os = "macos")]
