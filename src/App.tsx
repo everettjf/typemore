@@ -54,7 +54,7 @@ const I18N = {
     navHistory: "历史",
     navDictionary: "词库",
     navSettings: "设置",
-    titleHome: "Type More with your voice.",
+    titleHome: "用你的声音，打出更多文字。",
     subHome: "开源、离线优先，支持 BYOD（Bring Your Own Key）的语音转写工作流。",
     featureOpenSource: "Open Source",
     featureOfflineFirst: "Offline First",
