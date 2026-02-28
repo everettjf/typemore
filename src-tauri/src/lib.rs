@@ -8,7 +8,7 @@ use std::{
     fs,
     io::{BufWriter, Cursor, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::Mutex,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -1062,6 +1062,55 @@ fn escape_applescript_text(input: &str) -> String {
     escaped
 }
 
+fn run_osascript(script: &str) -> Result<(), String> {
+    let status = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status()
+        .map_err(|e| format!("failed to run osascript: {e}"))?;
+    if !status.success() {
+        return Err("failed to run osascript command".into());
+    }
+    Ok(())
+}
+
+fn pbcopy_text(text: &str) -> Result<(), String> {
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to start pbcopy: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| format!("failed to write clipboard text: {e}"))?;
+    } else {
+        return Err("failed to access pbcopy stdin".into());
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed waiting pbcopy: {e}"))?;
+    if !status.success() {
+        return Err("pbcopy exited with non-zero status".into());
+    }
+    Ok(())
+}
+
+fn type_text_via_paste(text: &str) -> Result<(), String> {
+    let previous_clipboard = Command::new("pbpaste")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string());
+
+    pbcopy_text(text)?;
+    run_osascript("tell application \"System Events\" to keystroke \"v\" using command down")?;
+
+    if let Some(prev) = previous_clipboard {
+        let _ = pbcopy_text(&prev);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn type_text_to_focused_app(text: String) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
@@ -1071,19 +1120,16 @@ fn type_text_to_focused_app(text: String) -> Result<(), String> {
         return Err("accessibility permission not granted".into());
     }
 
-    let script = format!(
-        "tell application \"System Events\" to keystroke \"{}\"",
-        escape_applescript_text(&text)
-    );
-    let status = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .status()
-        .map_err(|e| format!("failed to run osascript: {e}"))?;
-    if !status.success() {
-        return Err("failed to type text via System Events".into());
+    if text.is_ascii() {
+        let script = format!(
+            "tell application \"System Events\" to keystroke \"{}\"",
+            escape_applescript_text(&text)
+        );
+        run_osascript(&script)
+    } else {
+        // Non-ASCII input (e.g. Chinese) is more reliable via paste than keystroke.
+        type_text_via_paste(&text)
     }
-    Ok(())
 }
 
 fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
