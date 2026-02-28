@@ -122,7 +122,6 @@ struct AccessibilityStatus {
     supported: bool,
     trusted: bool,
     ax_trusted: bool,
-    tcc_allowed: Option<bool>,
     runtime_hint: Option<String>,
 }
 
@@ -974,75 +973,9 @@ fn macos_request_accessibility_permission() -> bool {
     false
 }
 
-fn shell_escape_single_quoted(input: &str) -> String {
-    input.replace('\'', "''")
-}
-
-#[cfg(target_os = "macos")]
-fn macos_tcc_accessibility_allowed(app: &AppHandle) -> Option<bool> {
-    let home = std::env::var("HOME").ok()?;
-    let db_path = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
-    if !Path::new(&db_path).exists() {
-        return None;
-    }
-
-    let bundle_id = app.config().identifier.as_str();
-    let exe_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_default();
-
-    let bundle_esc = shell_escape_single_quoted(bundle_id);
-    let exe_esc = shell_escape_single_quoted(&exe_path);
-    let base_where = format!(
-        "service='kTCCServiceAccessibility' AND (client='{bundle_esc}' OR client='{exe_esc}')"
-    );
-
-    let query_auth = format!(
-        "SELECT auth_value FROM access WHERE {base_where} ORDER BY last_modified DESC LIMIT 1;"
-    );
-    let query_allowed =
-        format!("SELECT allowed FROM access WHERE {base_where} ORDER BY last_modified DESC LIMIT 1;");
-
-    let run_query = |sql: &str| -> Option<String> {
-        let output = Command::new("sqlite3")
-            .arg(&db_path)
-            .arg(sql)
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Some(raw)
-    };
-
-    if let Some(value) = run_query(&query_auth) {
-        if value.is_empty() {
-            return Some(false);
-        }
-        return Some(matches!(value.as_str(), "1" | "2"));
-    }
-
-    if let Some(value) = run_query(&query_allowed) {
-        if value.is_empty() {
-            return Some(false);
-        }
-        return Some(matches!(value.as_str(), "1"));
-    }
-
-    None
-}
-
-#[cfg(not(target_os = "macos"))]
-fn macos_tcc_accessibility_allowed(_app: &AppHandle) -> Option<bool> {
-    None
-}
-
 #[tauri::command]
-fn get_accessibility_status(app: AppHandle) -> AccessibilityStatus {
+fn get_accessibility_status() -> AccessibilityStatus {
     let ax_trusted = macos_is_accessibility_trusted();
-    let tcc_allowed = macos_tcc_accessibility_allowed(&app);
     let current_exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
@@ -1055,27 +988,21 @@ fn get_accessibility_status(app: AppHandle) -> AccessibilityStatus {
     } else {
         None
     };
-    let trusted = if cfg!(target_os = "macos") {
-        ax_trusted && tcc_allowed.unwrap_or(false)
-    } else {
-        false
-    };
+    let trusted = if cfg!(target_os = "macos") { ax_trusted } else { false };
     AccessibilityStatus {
         supported: cfg!(target_os = "macos"),
         trusted,
         ax_trusted,
-        tcc_allowed,
         runtime_hint,
     }
 }
 
 #[tauri::command]
-fn request_accessibility_permission(app: AppHandle) -> AccessibilityStatus {
+fn request_accessibility_permission() -> AccessibilityStatus {
     if cfg!(target_os = "macos") {
         let _ = macos_request_accessibility_permission();
     }
     let ax_trusted = macos_is_accessibility_trusted();
-    let tcc_allowed = macos_tcc_accessibility_allowed(&app);
     let current_exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
@@ -1088,16 +1015,11 @@ fn request_accessibility_permission(app: AppHandle) -> AccessibilityStatus {
     } else {
         None
     };
-    let trusted = if cfg!(target_os = "macos") {
-        ax_trusted && tcc_allowed.unwrap_or(false)
-    } else {
-        false
-    };
+    let trusted = if cfg!(target_os = "macos") { ax_trusted } else { false };
     AccessibilityStatus {
         supported: cfg!(target_os = "macos"),
         trusted,
         ax_trusted,
-        tcc_allowed,
         runtime_hint,
     }
 }
