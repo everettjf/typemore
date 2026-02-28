@@ -142,6 +142,7 @@ const I18N = {
     transcriptListenFailed: "监听模型进度失败: {error}",
     transcriptModelReady: "模型已就绪，可以开始录音识别。",
     transcriptModelInitFailed: "模型初始化失败: {error}",
+    transcriptInitInProgress: "模型初始化中，请稍后再按一次快捷键。",
     transcriptRecordingFailed: "录音识别失败: {error}",
     transcriptNeedInit: "请先初始化模型，再开始录音。",
     transcriptNeedSelect: "请先在左侧选择一个录音。",
@@ -224,6 +225,7 @@ const I18N = {
     transcriptListenFailed: "Failed to listen model progress: {error}",
     transcriptModelReady: "Model is ready. You can start recording.",
     transcriptModelInitFailed: "Model initialization failed: {error}",
+    transcriptInitInProgress: "Model is initializing. Please press the hotkey again in a moment.",
     transcriptRecordingFailed: "Recording transcription failed: {error}",
     transcriptNeedInit: "Please initialize the model before recording.",
     transcriptNeedSelect: "Please select a recording from the left list.",
@@ -758,14 +760,31 @@ function MainApp() {
       stopRecording();
       return;
     }
+
     if (!modelReady) {
-      setTranscript(t("transcriptNeedInit"));
-      await setOverlayState("ready", t("transcriptNeedInit"));
-      window.setTimeout(() => {
-        void hideOverlay();
-      }, 1600);
-      return;
+      try {
+        const status = await invoke<ModelInitStatus>("init_model");
+        setInitStatus(status);
+        if (!status.ready) {
+          const msg = t("transcriptInitInProgress");
+          setTranscript(msg);
+          await setOverlayState("ready", msg);
+          window.setTimeout(() => {
+            void hideOverlay();
+          }, 1600);
+          return;
+        }
+      } catch (err) {
+        const msg = t("transcriptModelInitFailed", { error: String(err) });
+        setTranscript(msg);
+        await setOverlayState("ready", msg);
+        window.setTimeout(() => {
+          void hideOverlay();
+        }, 1800);
+        return;
+      }
     }
+
     try {
       recordingByHotkeyRef.current = true;
       await startRecording();
