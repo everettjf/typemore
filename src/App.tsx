@@ -47,6 +47,7 @@ type Page = "home" | "history" | "dictionary";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
 type OverlayPhase = "hidden" | "listening" | "thinking" | "ready";
+type CaptureTarget = "toggle" | "insert" | null;
 
 type AccessibilityStatus = {
   supported: boolean;
@@ -123,6 +124,9 @@ const I18N = {
     settingsHotkeyInsertPlaceholder: "例如: CommandOrControl+Alt+Enter",
     settingsHotkeySave: "保存快捷键",
     settingsHotkeyReset: "恢复默认",
+    settingsHotkeyRecord: "录制",
+    settingsHotkeyRecording: "录制中...",
+    settingsHotkeyPressHint: "点击“录制”后直接按组合键；按 Esc 取消。",
     languageModeLabel: "界面语言",
     langAuto: "自动（跟随系统）",
     langZh: "中文",
@@ -204,6 +208,9 @@ const I18N = {
     settingsHotkeyInsertPlaceholder: "e.g. CommandOrControl+Alt+Enter",
     settingsHotkeySave: "Save hotkeys",
     settingsHotkeyReset: "Reset default",
+    settingsHotkeyRecord: "Record",
+    settingsHotkeyRecording: "Recording...",
+    settingsHotkeyPressHint: "Click Record, then press a key combo. Press Esc to cancel.",
     languageModeLabel: "Interface language",
     langAuto: "Auto (System)",
     langZh: "Chinese",
@@ -310,6 +317,7 @@ function App() {
   const [hotkeyToggle, setHotkeyToggle] = useState(DEFAULT_HOTKEY_TOGGLE);
   const [hotkeyInsert, setHotkeyInsert] = useState(DEFAULT_HOTKEY_INSERT);
   const [savingHotkeys, setSavingHotkeys] = useState(false);
+  const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -361,6 +369,53 @@ function App() {
     }),
     [levelHistory]
   );
+
+  function normalizeHotkeyLabel(value: string) {
+    return value
+      .replace(/CommandOrControl/g, "Cmd/Ctrl")
+      .replace(/Alt/g, "Option/Alt");
+  }
+
+  function buildShortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
+    const isModifierOnly =
+      event.key === "Shift" || event.key === "Control" || event.key === "Alt" || event.key === "Meta";
+    if (isModifierOnly) {
+      return null;
+    }
+
+    let key = "";
+    if (event.key === " ") {
+      key = "Space";
+    } else if (event.key === "Enter") {
+      key = "Enter";
+    } else if (event.key.length === 1 && /^[a-zA-Z]$/.test(event.key)) {
+      key = event.key.toUpperCase();
+    } else if (event.key.length === 1 && /^[0-9]$/.test(event.key)) {
+      key = event.key;
+    } else if (/^F[0-9]{1,2}$/.test(event.key)) {
+      key = event.key.toUpperCase();
+    } else {
+      const known = ["Tab", "Escape", "Backspace", "Delete", "Home", "End", "PageUp", "PageDown"];
+      if (known.includes(event.key)) {
+        key = event.key;
+      } else {
+        return null;
+      }
+    }
+
+    const parts: string[] = [];
+    if (event.metaKey || event.ctrlKey) {
+      parts.push("CommandOrControl");
+    }
+    if (event.altKey) {
+      parts.push("Alt");
+    }
+    if (event.shiftKey) {
+      parts.push("Shift");
+    }
+    parts.push(key);
+    return parts.join("+");
+  }
 
   function showOverlay(phase: OverlayPhase, text = "", autoHideMs?: number) {
     if (overlayTimerRef.current != null) {
@@ -495,6 +550,37 @@ function App() {
       })
       .catch(() => {});
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!captureTarget) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        setCaptureTarget(null);
+        return;
+      }
+
+      const shortcut = buildShortcutFromKeyboardEvent(event);
+      if (!shortcut) {
+        return;
+      }
+
+      if (captureTarget === "toggle") {
+        setHotkeyToggle(shortcut);
+      } else {
+        setHotkeyInsert(shortcut);
+      }
+      setCaptureTarget(null);
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [captureTarget]);
 
   function stopLevelMonitor() {
     if (levelRafRef.current != null) {
@@ -1193,22 +1279,43 @@ function App() {
                   <div className="mt-3 space-y-3">
                     <div>
                       <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyToggle")}</label>
-                      <input
-                        value={hotkeyToggle}
-                        onChange={(event) => setHotkeyToggle(event.target.value)}
-                        placeholder={t("settingsHotkeyTogglePlaceholder")}
-                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                      />
+                      <div className="flex gap-2">
+                        <input
+                          value={normalizeHotkeyLabel(hotkeyToggle)}
+                          readOnly
+                          placeholder={t("settingsHotkeyTogglePlaceholder")}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
+                        />
+                        <Button
+                          variant="outline"
+                          type="button"
+                          onClick={() => setCaptureTarget("toggle")}
+                          disabled={savingHotkeys}
+                        >
+                          {captureTarget === "toggle" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
+                        </Button>
+                      </div>
                     </div>
                     <div>
                       <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyInsert")}</label>
-                      <input
-                        value={hotkeyInsert}
-                        onChange={(event) => setHotkeyInsert(event.target.value)}
-                        placeholder={t("settingsHotkeyInsertPlaceholder")}
-                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                      />
+                      <div className="flex gap-2">
+                        <input
+                          value={normalizeHotkeyLabel(hotkeyInsert)}
+                          readOnly
+                          placeholder={t("settingsHotkeyInsertPlaceholder")}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
+                        />
+                        <Button
+                          variant="outline"
+                          type="button"
+                          onClick={() => setCaptureTarget("insert")}
+                          disabled={savingHotkeys}
+                        >
+                          {captureTarget === "insert" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
+                        </Button>
+                      </div>
                     </div>
+                    <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
                     <div className="flex gap-2">
                       <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys}>
                         {savingHotkeys ? <Loader2 size={14} className="animate-spin" /> : null}
