@@ -56,7 +56,10 @@ const I18N = {
     navDictionary: "词库",
     navSettings: "设置",
     titleHome: "自然说话，清晰落字。",
-    subHome: "聚焦核心流程：初始化模型、录音、转写。",
+    subHome: "开源、离线优先，支持 BYOD（Bring Your Own Key）的语音转写工作流。",
+    featureOpenSource: "Open Source",
+    featureOfflineFirst: "Offline First",
+    featureByod: "BYOD",
     modelReady: "模型已就绪",
     modelInitializing: "初始化中",
     modelNotReady: "模型未就绪",
@@ -116,7 +119,10 @@ const I18N = {
     navDictionary: "Dictionary",
     navSettings: "Settings",
     titleHome: "Speak naturally, write clearly.",
-    subHome: "Focus on core flow: model init, recording, and transcription.",
+    subHome: "Open-source and offline-first voice transcription workflow with BYOD (Bring Your Own Key).",
+    featureOpenSource: "Open Source",
+    featureOfflineFirst: "Offline First",
+    featureByod: "BYOD",
     modelReady: "Model Ready",
     modelInitializing: "Initializing",
     modelNotReady: "Not Ready",
@@ -627,6 +633,11 @@ function App() {
                 <div>
                   <h1 className="text-3xl font-semibold tracking-tight">{t("titleHome")}</h1>
                   <p className="mt-1 text-sm text-slate-500">{t("subHome")}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge className="bg-slate-100 text-slate-700 border-slate-200">{t("featureOpenSource")}</Badge>
+                    <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">{t("featureOfflineFirst")}</Badge>
+                    <Badge className="bg-sky-100 text-sky-700 border-sky-200">{t("featureByod")}</Badge>
+                  </div>
                 </div>
                 <Badge className={cn(badgeClass(modelReady))}>
                   {modelReady ? t("modelReady") : initStatus.running ? t("modelInitializing") : t("modelNotReady")}
