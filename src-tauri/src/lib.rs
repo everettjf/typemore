@@ -1078,6 +1078,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
     .inner_size(560.0, 120.0)
     .position(360.0, 36.0)
     .shadow(false)
+    .transparent(true)
     .visible(false)
     .build()
     .map_err(|e| format!("failed to create overlay window: {e}"))?;

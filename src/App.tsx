@@ -361,6 +361,7 @@ function MainApp() {
   const levelAnalyserRef = useRef<AnalyserNode | null>(null);
   const levelRafRef = useRef<number | null>(null);
   const recordingByHotkeyRef = useRef(false);
+  const lastHotkeyAtRef = useRef(0);
 
   const selected = useMemo(
     () => recordings.find((item) => item.id === selectedId) ?? null,
@@ -746,6 +747,12 @@ function MainApp() {
   }
 
   async function onHotkeyToggleDictation() {
+    const now = Date.now();
+    if (now - lastHotkeyAtRef.current < 300) {
+      return;
+    }
+    lastHotkeyAtRef.current = now;
+
     if (isRecording) {
       await setOverlayState("thinking");
       stopRecording();
