@@ -50,12 +50,11 @@ const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
 
 const I18N = {
   zh: {
-    appTagline: "离线语音转文字",
     navHome: "首页",
     navHistory: "历史",
     navDictionary: "词库",
     navSettings: "设置",
-    titleHome: "自然说话，清晰落字。",
+    titleHome: "Type More with your voice.",
     subHome: "开源、离线优先，支持 BYOD（Bring Your Own Key）的语音转写工作流。",
     featureOpenSource: "Open Source",
     featureOfflineFirst: "Offline First",
@@ -113,12 +112,11 @@ const I18N = {
     transcriptOpenTempDirFailed: "打开临时目录失败: {error}",
   },
   en: {
-    appTagline: "Offline speech to text",
     navHome: "Home",
     navHistory: "History",
     navDictionary: "Dictionary",
     navSettings: "Settings",
-    titleHome: "Speak naturally, write clearly.",
+    titleHome: "Type More with your voice.",
     subHome: "Open-source and offline-first voice transcription workflow with BYOD (Bring Your Own Key).",
     featureOpenSource: "Open Source",
     featureOfflineFirst: "Offline First",
@@ -187,6 +185,43 @@ function formatI18n(template: string, vars?: Record<string, string | number>) {
 function detectSystemLang(): UiLang {
   const lang = (navigator.language || "en-US").toLowerCase();
   return lang.startsWith("zh") ? "zh" : "en";
+}
+
+function localizedInitMessage(
+  status: ModelInitStatus,
+  uiLang: UiLang
+) {
+  if (uiLang === "zh") {
+    return status.message;
+  }
+
+  if (status.phase === "done" || status.ready) {
+    return "Model is ready";
+  }
+  if (status.phase === "queued") {
+    return "Initialization queued";
+  }
+  if (status.phase === "extract") {
+    return "Extracting model files...";
+  }
+  if (status.phase === "scan") {
+    return "Validating model files...";
+  }
+  if (status.phase === "error") {
+    return status.error ?? "Model initialization failed";
+  }
+  if (status.phase === "download") {
+    const match = status.message.match(/([0-9]+(?:\\.[0-9]+)?)%\\s*\\(([^)]+)\\)/);
+    if (match) {
+      return `Downloading model... ${match[1]}% (${match[2]})`;
+    }
+    if (status.message.includes("skip") || status.message.includes("已下载")) {
+      return "Model archive already exists, skipping download";
+    }
+    return `Downloading model... ${Math.max(0, Math.min(100, status.progress)).toFixed(1)}%`;
+  }
+
+  return status.message;
 }
 
 function App() {
@@ -588,8 +623,7 @@ function App() {
       <div className="mx-auto grid h-[calc(100vh-1.5rem)] max-w-[1540px] grid-cols-1 gap-3 rounded-3xl border border-white/70 bg-white/60 p-3 shadow-2xl shadow-slate-200/70 backdrop-blur md:h-[calc(100vh-2.5rem)] md:grid-cols-[230px_1fr] md:p-4">
         <aside className="flex min-h-0 flex-col rounded-2xl border border-slate-200/80 bg-white/95 p-3">
           <div className="px-2 pb-3 pt-1">
-            <div className="text-2xl font-bold tracking-tight">TypeMore</div>
-            <div className="text-xs text-slate-500">{t("appTagline")}</div>
+            <div className="text-2xl font-bold tracking-tight">Type More</div>
           </div>
 
           <nav className="space-y-1">
@@ -681,7 +715,7 @@ function App() {
 
                 <div className="space-y-2">
                   <div className="text-sm text-slate-700 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis">
-                    {initStatus.message}
+                    {localizedInitMessage(initStatus, uiLang)}
                   </div>
                   <Progress value={Math.min(100, Math.max(0, initStatus.progress))} />
                   {initStatus.error && <div className="text-xs text-red-600">{initStatus.error}</div>}
