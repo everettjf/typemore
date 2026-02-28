@@ -300,10 +300,10 @@ function OverlayWindowApp() {
   const title = phase === "listening" ? "正在听..." : phase === "thinking" ? "识别中..." : "就绪";
   return (
     <main className="h-screen w-screen bg-transparent p-0">
-      <div className="h-full w-full overflow-hidden rounded-lg border border-white/20 bg-black/90 px-2 py-0.5 text-white shadow-2xl">
-        <div className="flex items-center justify-between gap-4">
+      <div className="h-full w-full overflow-hidden rounded-lg border border-white/20 bg-black/90 px-2 text-white shadow-2xl">
+        <div className="flex h-full items-center justify-between gap-3">
           <div className="text-xs font-semibold tracking-tight leading-none">{title}</div>
-          {phase === "listening" && (
+          {phase === "listening" ? (
             <div className="flex items-center gap-1">
               <span className="h-1.5 w-1 rounded-full bg-white animate-pulse" />
               <span className="h-2 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
@@ -311,9 +311,10 @@ function OverlayWindowApp() {
               <span className="h-2 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
               <span className="h-1.5 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
             </div>
+          ) : (
+            text && <div className="truncate text-[10px] text-white/80">{text}</div>
           )}
         </div>
-        {text && phase !== "listening" && <div className="mt-1 truncate text-xs text-white/80">{text}</div>}
       </div>
     </main>
   );
