@@ -1,0 +1,23 @@
+[package]
+name = "Typemore"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "Typemore_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+walkdir = "2.5"
+sherpa-rs = "0.6.8"
+hound = "3.5"

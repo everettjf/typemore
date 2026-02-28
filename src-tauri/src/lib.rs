@@ -1,0 +1,714 @@
+use serde::{Deserialize, Serialize};
+use sherpa_rs::{paraformer::ParaformerConfig, paraformer::ParaformerRecognizer};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{BufWriter, Cursor, Read, Write},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tauri::{AppHandle, Emitter, Manager};
+use walkdir::WalkDir;
+
+const MODEL_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2";
+const MODEL_DIR_NAME: &str = "sherpa-model";
+const EXTRACTED_DIR_NAME: &str = "extracted";
+const RECORDINGS_DIR_NAME: &str = "recordings";
+const TRANSCRIPT_CACHE_FILE: &str = "transcript_cache.json";
+const INIT_EVENT: &str = "model-init-progress";
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RecordingItem {
+    id: String,
+    name: String,
+    file_path: String,
+    created_at_ms: u128,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelStatus {
+    ready: bool,
+    model_path: Option<String>,
+    tokens_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveAndTranscribeResult {
+    recording: RecordingItem,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveRecordingPayload {
+    suggested_name: Option<String>,
+    wav_data: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ModelInitStatus {
+    running: bool,
+    phase: String,
+    progress: f32,
+    message: String,
+    ready: bool,
+    error: Option<String>,
+}
+
+impl Default for ModelInitStatus {
+    fn default() -> Self {
+        Self {
+            running: false,
+            phase: "idle".into(),
+            progress: 0.0,
+            message: "模型尚未初始化".into(),
+            ready: false,
+            error: None,
+        }
+    }
+}
+
+#[derive(Default)]
+struct AppState {
+    init_status: Mutex<ModelInitStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedTranscript {
+    text: String,
+    updated_at_ms: u128,
+}
+
+type TranscriptCacheMap = HashMap<String, CachedTranscript>;
+
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))
+}
+
+fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_data_dir(app)?.join(RECORDINGS_DIR_NAME);
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create recordings dir: {e}"))?;
+    Ok(dir)
+}
+
+fn transcript_cache_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(recordings_dir(app)?.join(TRANSCRIPT_CACHE_FILE))
+}
+
+fn model_root_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_data_dir(app)?.join(MODEL_DIR_NAME);
+    fs::create_dir_all(&dir).map_err(|e| format!("failed to create model dir: {e}"))?;
+    Ok(dir)
+}
+
+fn file_stem_as_name(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|v| v.to_str())
+        .unwrap_or("untitled")
+        .replace('_', " ")
+}
+
+fn created_at_ms(path: &Path) -> u128 {
+    let modified = fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .unwrap_or_else(SystemTime::now);
+    modified
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn to_recording_item(path: &Path) -> Option<RecordingItem> {
+    if path.extension().and_then(|x| x.to_str()) != Some("wav") {
+        return None;
+    }
+    let id = path.file_name()?.to_string_lossy().to_string();
+    Some(RecordingItem {
+        id,
+        name: file_stem_as_name(path),
+        file_path: path.to_string_lossy().to_string(),
+        created_at_ms: created_at_ms(path),
+    })
+}
+
+fn collect_recordings(dir: &Path) -> Result<Vec<RecordingItem>, String> {
+    let mut items = Vec::new();
+    for entry in fs::read_dir(dir).map_err(|e| format!("failed to list recordings: {e}"))? {
+        let entry = entry.map_err(|e| format!("failed to read recording entry: {e}"))?;
+        if let Some(item) = to_recording_item(&entry.path()) {
+            items.push(item);
+        }
+    }
+    items.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+    Ok(items)
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let filtered: String = name
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | ' ' => c,
+            _ => '_',
+        })
+        .collect();
+    let compact = filtered.trim().replace(' ', "_");
+    if compact.is_empty() {
+        "recording".into()
+    } else {
+        compact
+    }
+}
+
+fn find_model_files(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut onnx_candidates: Vec<PathBuf> = Vec::new();
+    let mut token_candidates: Vec<PathBuf> = Vec::new();
+
+    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_lowercase();
+
+        if file_name.ends_with(".onnx") {
+            onnx_candidates.push(path.to_path_buf());
+        }
+        if file_name == "tokens.txt" || (file_name.contains("token") && file_name.ends_with(".txt"))
+        {
+            token_candidates.push(path.to_path_buf());
+        }
+    }
+
+    onnx_candidates.sort_by_key(|p| {
+        let name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_lowercase();
+        let mut score = 100;
+        if name.contains("model") {
+            score -= 40;
+        }
+        if name.contains("int8") {
+            score -= 10;
+        }
+        score
+    });
+    token_candidates.sort();
+
+    match (onnx_candidates.first(), token_candidates.first()) {
+        (Some(model), Some(tokens)) => Some((model.clone(), tokens.clone())),
+        _ => None,
+    }
+}
+
+fn model_files_if_ready(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    let extracted = model_root_dir(app)?.join(EXTRACTED_DIR_NAME);
+    find_model_files(&extracted).ok_or_else(|| "model not initialized yet".into())
+}
+
+fn set_init_status(app: &AppHandle, status: ModelInitStatus) {
+    {
+        let state = app.state::<AppState>();
+        if let Ok(mut lock) = state.init_status.lock() {
+            *lock = status.clone();
+        };
+    }
+    let _ = app.emit(INIT_EVENT, status);
+}
+
+fn get_init_status(app: &AppHandle) -> ModelInitStatus {
+    let state = app.state::<AppState>();
+    state
+        .init_status
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| ModelInitStatus::default())
+}
+
+fn load_transcript_cache(app: &AppHandle) -> Result<TranscriptCacheMap, String> {
+    let cache_file = transcript_cache_file(app)?;
+    if !cache_file.exists() {
+        return Ok(HashMap::new());
+    }
+    let raw = fs::read_to_string(&cache_file)
+        .map_err(|e| format!("failed to read transcript cache: {e}"))?;
+    serde_json::from_str::<TranscriptCacheMap>(&raw)
+        .map_err(|e| format!("failed to parse transcript cache: {e}"))
+}
+
+fn save_transcript_cache(app: &AppHandle, cache: &TranscriptCacheMap) -> Result<(), String> {
+    let cache_file = transcript_cache_file(app)?;
+    let raw = serde_json::to_string_pretty(cache)
+        .map_err(|e| format!("failed to serialize transcript cache: {e}"))?;
+    fs::write(cache_file, raw).map_err(|e| format!("failed to persist transcript cache: {e}"))
+}
+
+fn get_cached_transcript(app: &AppHandle, id: &str) -> Result<Option<String>, String> {
+    let cache = load_transcript_cache(app)?;
+    Ok(cache.get(id).map(|v| v.text.clone()))
+}
+
+fn put_cached_transcript(app: &AppHandle, id: &str, text: &str) -> Result<(), String> {
+    let mut cache = load_transcript_cache(app)?;
+    cache.insert(
+        id.to_string(),
+        CachedTranscript {
+            text: text.to_string(),
+            updated_at_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        },
+    );
+    save_transcript_cache(app, &cache)
+}
+
+fn remove_cached_transcript(app: &AppHandle, id: &str) -> Result<(), String> {
+    let mut cache = load_transcript_cache(app)?;
+    cache.remove(id);
+    save_transcript_cache(app, &cache)
+}
+
+fn move_cached_transcript_key(app: &AppHandle, from_id: &str, to_id: &str) -> Result<(), String> {
+    let mut cache = load_transcript_cache(app)?;
+    if let Some(v) = cache.remove(from_id) {
+        cache.insert(to_id.to_string(), v);
+    }
+    save_transcript_cache(app, &cache)
+}
+
+fn extract_model_archive(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(output_dir).map_err(|e| format!("failed to create extract dir: {e}"))?;
+    let status = Command::new("tar")
+        .arg("-xjf")
+        .arg(archive_path)
+        .arg("-C")
+        .arg(output_dir)
+        .status()
+        .map_err(|e| format!("failed to run tar: {e}"))?;
+    if !status.success() {
+        return Err("failed to extract model archive with tar".into());
+    }
+    Ok(())
+}
+
+fn download_file_with_progress(
+    url: &str,
+    output: &Path,
+    on_progress: &mut dyn FnMut(f32, String),
+) -> Result<(), String> {
+    let client = reqwest::blocking::Client::new();
+    let mut resp = client
+        .get(url)
+        .send()
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("failed to download model archive: {e}"))?;
+
+    let total = resp.content_length();
+    let mut writer = BufWriter::new(
+        fs::File::create(output).map_err(|e| format!("failed to create archive file: {e}"))?,
+    );
+
+    let mut downloaded: u64 = 0;
+    let mut buffer = [0u8; 64 * 1024];
+
+    loop {
+        let n = resp
+            .read(&mut buffer)
+            .map_err(|e| format!("failed while downloading model archive: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        writer
+            .write_all(&buffer[..n])
+            .map_err(|e| format!("failed to write model archive: {e}"))?;
+
+        downloaded += n as u64;
+        let message = if let Some(all) = total {
+            let p = (downloaded as f32 / all as f32).clamp(0.0, 1.0);
+            on_progress(
+                80.0 * p,
+                format!(
+                    "下载模型中... {:.1}% ({:.1} MB / {:.1} MB)",
+                    p * 100.0,
+                    downloaded as f32 / 1_048_576.0,
+                    all as f32 / 1_048_576.0
+                ),
+            );
+            continue;
+        } else {
+            format!("下载模型中... {:.1} MB", downloaded as f32 / 1_048_576.0)
+        };
+        on_progress(40.0, message);
+    }
+
+    writer
+        .flush()
+        .map_err(|e| format!("failed to flush model archive: {e}"))?;
+    Ok(())
+}
+
+fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
+    if model_files_if_ready(app).is_ok() {
+        set_init_status(
+            app,
+            ModelInitStatus {
+                running: false,
+                phase: "done".into(),
+                progress: 100.0,
+                message: "模型已就绪".into(),
+                ready: true,
+                error: None,
+            },
+        );
+        return Ok(());
+    }
+
+    let model_root = model_root_dir(app)?;
+    let extracted = model_root.join(EXTRACTED_DIR_NAME);
+    let archive_path = model_root.join("model.tar.bz2");
+
+    if !archive_path.exists() {
+        set_init_status(
+            app,
+            ModelInitStatus {
+                running: true,
+                phase: "download".into(),
+                progress: 1.0,
+                message: "开始下载模型".into(),
+                ready: false,
+                error: None,
+            },
+        );
+
+        let mut progress_callback = |progress: f32, message: String| {
+            set_init_status(
+                app,
+                ModelInitStatus {
+                    running: true,
+                    phase: "download".into(),
+                    progress,
+                    message,
+                    ready: false,
+                    error: None,
+                },
+            );
+        };
+        download_file_with_progress(MODEL_ARCHIVE_URL, &archive_path, &mut progress_callback)?;
+    } else {
+        set_init_status(
+            app,
+            ModelInitStatus {
+                running: true,
+                phase: "download".into(),
+                progress: 80.0,
+                message: "检测到已下载模型包，跳过下载".into(),
+                ready: false,
+                error: None,
+            },
+        );
+    }
+
+    set_init_status(
+        app,
+        ModelInitStatus {
+            running: true,
+            phase: "extract".into(),
+            progress: 85.0,
+            message: "正在解压模型".into(),
+            ready: false,
+            error: None,
+        },
+    );
+
+    extract_model_archive(&archive_path, &extracted)?;
+
+    set_init_status(
+        app,
+        ModelInitStatus {
+            running: true,
+            phase: "scan".into(),
+            progress: 96.0,
+            message: "正在校验模型文件".into(),
+            ready: false,
+            error: None,
+        },
+    );
+
+    let _ = model_files_if_ready(app)?;
+
+    set_init_status(
+        app,
+        ModelInitStatus {
+            running: false,
+            phase: "done".into(),
+            progress: 100.0,
+            message: "模型初始化完成".into(),
+            ready: true,
+            error: None,
+        },
+    );
+
+    Ok(())
+}
+
+fn decode_wav_samples(wav_data: &[u8]) -> Result<(Vec<f32>, u32), String> {
+    let mut reader = hound::WavReader::new(Cursor::new(wav_data))
+        .map_err(|e| format!("invalid wav audio: {e}"))?;
+    let spec = reader.spec();
+
+    if spec.channels != 1 {
+        return Err("wav must be mono channel".into());
+    }
+
+    let samples = match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("failed to read float samples: {e}"))?,
+        hound::SampleFormat::Int => {
+            if spec.bits_per_sample <= 16 {
+                reader
+                    .samples::<i16>()
+                    .map(|v| v.map(|s| s as f32 / i16::MAX as f32))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("failed to read int16 samples: {e}"))?
+            } else {
+                reader
+                    .samples::<i32>()
+                    .map(|v| v.map(|s| s as f32 / i32::MAX as f32))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("failed to read int32 samples: {e}"))?
+            }
+        }
+    };
+
+    Ok((samples, spec.sample_rate))
+}
+
+fn transcribe_samples(
+    model_path: &Path,
+    tokens_path: &Path,
+    sample_rate: u32,
+    samples: &[f32],
+) -> Result<String, String> {
+    let mut recognizer = ParaformerRecognizer::new(ParaformerConfig {
+        model: model_path.to_string_lossy().to_string(),
+        tokens: tokens_path.to_string_lossy().to_string(),
+        ..Default::default()
+    })
+    .map_err(|e| format!("failed to initialize recognizer: {e}"))?;
+
+    let result = recognizer.transcribe(sample_rate, samples);
+    Ok(result.text)
+}
+
+#[tauri::command]
+fn check_model_status(app: AppHandle) -> Result<ModelStatus, String> {
+    Ok(match model_files_if_ready(&app) {
+        Ok((model, tokens)) => ModelStatus {
+            ready: true,
+            model_path: Some(model.to_string_lossy().to_string()),
+            tokens_path: Some(tokens.to_string_lossy().to_string()),
+        },
+        Err(_) => ModelStatus {
+            ready: false,
+            model_path: None,
+            tokens_path: None,
+        },
+    })
+}
+
+#[tauri::command]
+fn get_model_init_status(app: AppHandle) -> Result<ModelInitStatus, String> {
+    let mut status = get_init_status(&app);
+    if !status.running {
+        status.ready = model_files_if_ready(&app).is_ok();
+        if status.ready && status.phase == "idle" {
+            status.phase = "done".into();
+            status.progress = 100.0;
+            status.message = "模型已就绪".into();
+        }
+    }
+    Ok(status)
+}
+
+#[tauri::command]
+fn init_model(app: AppHandle) -> Result<ModelInitStatus, String> {
+    if model_files_if_ready(&app).is_ok() {
+        let status = ModelInitStatus {
+            running: false,
+            phase: "done".into(),
+            progress: 100.0,
+            message: "模型已就绪".into(),
+            ready: true,
+            error: None,
+        };
+        set_init_status(&app, status.clone());
+        return Ok(status);
+    }
+
+    let current = get_init_status(&app);
+    if current.running {
+        return Ok(current);
+    }
+
+    let started = ModelInitStatus {
+        running: true,
+        phase: "queued".into(),
+        progress: 0.0,
+        message: "初始化任务已启动".into(),
+        ready: false,
+        error: None,
+    };
+    set_init_status(&app, started.clone());
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(err) = run_model_init_job(&app_handle) {
+            set_init_status(
+                &app_handle,
+                ModelInitStatus {
+                    running: false,
+                    phase: "error".into(),
+                    progress: 0.0,
+                    message: "模型初始化失败".into(),
+                    ready: false,
+                    error: Some(err),
+                },
+            );
+        }
+    });
+
+    Ok(started)
+}
+
+#[tauri::command]
+fn list_recordings(app: AppHandle) -> Result<Vec<RecordingItem>, String> {
+    let dir = recordings_dir(&app)?;
+    collect_recordings(&dir)
+}
+
+#[tauri::command]
+fn rename_recording(app: AppHandle, id: String, new_name: String) -> Result<RecordingItem, String> {
+    let dir = recordings_dir(&app)?;
+    let src = dir.join(&id);
+    if !src.exists() {
+        return Err("recording not found".into());
+    }
+
+    let sanitized = sanitize_filename(&new_name);
+    let dst_name = format!("{sanitized}.wav");
+    let dst = dir.join(dst_name);
+    fs::rename(&src, &dst).map_err(|e| format!("failed to rename recording: {e}"))?;
+    let dst_id = dst
+        .file_name()
+        .and_then(|v| v.to_str())
+        .ok_or_else(|| "failed to build new recording id".to_string())?
+        .to_string();
+    move_cached_transcript_key(&app, &id, &dst_id)?;
+
+    to_recording_item(&dst).ok_or_else(|| "failed to create recording metadata".into())
+}
+
+#[tauri::command]
+fn delete_recording(app: AppHandle, id: String) -> Result<(), String> {
+    let dir = recordings_dir(&app)?;
+    let target = dir.join(&id);
+    if target.exists() {
+        fs::remove_file(target).map_err(|e| format!("failed to delete recording: {e}"))?;
+    }
+    remove_cached_transcript(&app, &id)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_recording_cached_transcript(app: AppHandle, id: String) -> Result<Option<String>, String> {
+    get_cached_transcript(&app, &id)
+}
+
+#[tauri::command]
+fn transcribe_recording(app: AppHandle, id: String, force: Option<bool>) -> Result<String, String> {
+    if !force.unwrap_or(false) {
+        if let Some(text) = get_cached_transcript(&app, &id)? {
+            return Ok(text);
+        }
+    }
+
+    let dir = recordings_dir(&app)?;
+    let path = dir.join(&id);
+    if !path.exists() {
+        return Err("recording not found".into());
+    }
+
+    let (model, tokens) = model_files_if_ready(&app)?;
+    let wav_data = fs::read(&path).map_err(|e| format!("failed to read wav file: {e}"))?;
+    let (samples, sample_rate) = decode_wav_samples(&wav_data)?;
+    let text = transcribe_samples(&model, &tokens, sample_rate, &samples)?;
+    put_cached_transcript(&app, &id, &text)?;
+    Ok(text)
+}
+
+#[tauri::command]
+fn save_recording_and_transcribe(
+    app: AppHandle,
+    payload: SaveRecordingPayload,
+) -> Result<SaveAndTranscribeResult, String> {
+    let dir = recordings_dir(&app)?;
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
+    let base_name = sanitize_filename(payload.suggested_name.as_deref().unwrap_or("recording"));
+    let file_name = format!("{now_ms}_{base_name}.wav");
+    let path = dir.join(file_name);
+
+    fs::write(&path, &payload.wav_data).map_err(|e| format!("failed to save wav file: {e}"))?;
+
+    let (model, tokens) = model_files_if_ready(&app)?;
+    let (samples, sample_rate) = decode_wav_samples(&payload.wav_data)?;
+    let text = transcribe_samples(&model, &tokens, sample_rate, &samples)?;
+
+    let recording =
+        to_recording_item(&path).ok_or_else(|| "failed to build recording metadata".to_string())?;
+    put_cached_transcript(&app, &recording.id, &text)?;
+
+    Ok(SaveAndTranscribeResult { recording, text })
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .manage(AppState::default())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            check_model_status,
+            get_model_init_status,
+            init_model,
+            list_recordings,
+            rename_recording,
+            delete_recording,
+            get_recording_cached_transcript,
+            transcribe_recording,
+            save_recording_and_transcribe
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

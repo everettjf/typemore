@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "Inter", "PingFang SC", "SF Pro Text", sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+}
