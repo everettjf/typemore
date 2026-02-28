@@ -19,17 +19,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import {
-  CategoryScale,
-  Chart as ChartJS,
-  Filler,
-  LineElement,
-  LinearScale,
-  PointElement,
-  Tooltip,
-} from "chart.js";
 import { blobToMono16kWav } from "./components/app/audio";
-import { RecordingDialog } from "./components/app/recording-dialog";
 import type { ModelInitStatus, RecordingItem, SaveAndTranscribeResult } from "./components/app/types";
 import { badgeClass, defaultInitStatus, formatCurrentRecordingTime, formatListTime } from "./components/app/utils";
 import { Badge } from "./components/ui/badge";
@@ -40,8 +30,6 @@ import { ScrollArea } from "./components/ui/scroll-area";
 import { Separator } from "./components/ui/separator";
 import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/utils";
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip);
 
 type Page = "home" | "history" | "dictionary";
 type LangMode = "auto" | "zh-CN" | "en-US";
@@ -341,9 +329,6 @@ function MainApp() {
   const [isRecording, setIsRecording] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [inputLevel, setInputLevel] = useState(0);
-  const [levelHistory, setLevelHistory] = useState<number[]>(Array(36).fill(0));
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [dictionaryWords, setDictionaryWords] = useState<string[]>([]);
   const [newWord, setNewWord] = useState("");
   const [langMode, setLangMode] = useState<LangMode>(() => {
@@ -359,9 +344,6 @@ function MainApp() {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
-  const levelAudioCtxRef = useRef<AudioContext | null>(null);
-  const levelAnalyserRef = useRef<AnalyserNode | null>(null);
-  const levelRafRef = useRef<number | null>(null);
   const recordingByHotkeyRef = useRef(false);
   const lastHotkeyAtRef = useRef(0);
 
@@ -387,24 +369,6 @@ function MainApp() {
     return (key: keyof typeof dict, vars?: Record<string, string | number>) =>
       formatI18n(dict[key], vars);
   }, [uiLang]);
-
-  const levelChartData = useMemo(
-    () => ({
-      labels: levelHistory.map((_, idx) => idx),
-      datasets: [
-        {
-          data: levelHistory,
-          borderColor: "rgb(34, 197, 94)",
-          backgroundColor: "rgba(34, 197, 94, 0.2)",
-          borderWidth: 2,
-          pointRadius: 0,
-          tension: 0.35,
-          fill: true,
-        },
-      ],
-    }),
-    [levelHistory]
-  );
 
   function normalizeHotkeyLabel(value: string) {
     return value.replace(/CommandOrControl/g, "Cmd/Ctrl").replace(/Alt/g, "Option/Alt");
@@ -546,15 +510,6 @@ function MainApp() {
   }, [t]);
 
   useEffect(() => {
-    if (!isRecording) {
-      setRecordingSeconds(0);
-      return;
-    }
-    const timer = window.setInterval(() => setRecordingSeconds((prev) => prev + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [isRecording]);
-
-  useEffect(() => {
     if (!selectedId) {
       return;
     }
@@ -589,56 +544,6 @@ function MainApp() {
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [captureTarget]);
 
-  function stopLevelMonitor() {
-    if (levelRafRef.current != null) {
-      cancelAnimationFrame(levelRafRef.current);
-      levelRafRef.current = null;
-    }
-    if (levelAudioCtxRef.current) {
-      void levelAudioCtxRef.current.close();
-      levelAudioCtxRef.current = null;
-    }
-    levelAnalyserRef.current = null;
-    setInputLevel(0);
-    setLevelHistory(Array(36).fill(0));
-  }
-
-  function startLevelMonitor(stream: MediaStream) {
-    const audioCtx = new AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.85;
-    source.connect(analyser);
-
-    levelAudioCtxRef.current = audioCtx;
-    levelAnalyserRef.current = analyser;
-
-    const data = new Uint8Array(analyser.fftSize);
-    let frame = 0;
-    const tick = () => {
-      const current = levelAnalyserRef.current;
-      if (!current) {
-        return;
-      }
-      current.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i += 1) {
-        const centered = (data[i] - 128) / 128;
-        sum += centered * centered;
-      }
-      const rms = Math.sqrt(sum / data.length);
-      const normalized = Math.min(1, rms * 5.5);
-      setInputLevel(normalized);
-      frame += 1;
-      if (frame % 2 === 0) {
-        setLevelHistory((prev) => [...prev.slice(1), normalized]);
-      }
-      levelRafRef.current = requestAnimationFrame(tick);
-    };
-    levelRafRef.current = requestAnimationFrame(tick);
-  }
-
   async function onInitModel() {
     try {
       const status = await invoke<ModelInitStatus>("init_model");
@@ -665,7 +570,6 @@ function MainApp() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
     chunksRef.current = [];
-    startLevelMonitor(stream);
 
     const recorder = new MediaRecorder(stream);
     recorderRef.current = recorder;
@@ -677,7 +581,6 @@ function MainApp() {
     };
 
     recorder.onstop = async () => {
-      stopLevelMonitor();
       try {
         setIsBusy(true);
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
@@ -744,7 +647,6 @@ function MainApp() {
       await startRecording();
     } catch (err) {
       setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
-      stopLevelMonitor();
     }
   }
 
@@ -792,7 +694,6 @@ function MainApp() {
     } catch (err) {
       setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
       await setOverlayState("ready", t("transcriptRecordingFailed", { error: String(err) }));
-      stopLevelMonitor();
     }
   }
 
@@ -1324,13 +1225,6 @@ function MainApp() {
         </div>
       )}
 
-      <RecordingDialog
-        open={isRecording}
-        recordingSeconds={recordingSeconds}
-        inputLevel={inputLevel}
-        levelChartData={levelChartData}
-        onStop={onRecordClick}
-      />
     </main>
   );
 }
