@@ -246,6 +246,7 @@ struct PersistedHotkeySettings {
 struct OverlayStatePayload {
     phase: String,
     text: Option<String>,
+    level: Option<f32>,
 }
 
 fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str) {
@@ -1444,11 +1445,17 @@ fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Resu
     Ok(())
 }
 
-fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Result<(), String> {
+fn emit_overlay_state(
+    app: &AppHandle,
+    phase: &str,
+    text: Option<String>,
+    level: Option<f32>,
+) -> Result<(), String> {
     let overlay = ensure_overlay_window(app)?;
     let payload = OverlayStatePayload {
         phase: phase.to_string(),
         text,
+        level,
     };
 
     if phase == "hidden" {
@@ -1545,12 +1552,22 @@ fn set_fn_key_enabled(app: AppHandle, enabled: bool) -> Result<HotkeySettings, S
 
 #[tauri::command]
 fn set_overlay_state(app: AppHandle, phase: String, text: Option<String>) -> Result<(), String> {
-    emit_overlay_state(&app, &phase, text)
+    emit_overlay_state(&app, &phase, text, None)
+}
+
+#[tauri::command]
+fn set_overlay_level(
+    app: AppHandle,
+    phase: String,
+    text: Option<String>,
+    level: Option<f32>,
+) -> Result<(), String> {
+    emit_overlay_state(&app, &phase, text, level)
 }
 
 #[tauri::command]
 fn hide_overlay(app: AppHandle) -> Result<(), String> {
-    emit_overlay_state(&app, "hidden", None)
+    emit_overlay_state(&app, "hidden", None, None)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1683,6 +1700,7 @@ pub fn run() {
             set_global_shortcuts,
             set_fn_key_enabled,
             set_overlay_state,
+            set_overlay_level,
             hide_overlay
         ])
         .run(tauri::generate_context!())

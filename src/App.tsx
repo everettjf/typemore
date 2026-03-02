@@ -2,6 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  CategoryScale,
+  Chart as ChartJS,
+  Filler,
+  Legend,
+  LineElement,
+  LinearScale,
+  PointElement,
+  Tooltip,
+} from "chart.js";
+import { Line } from "react-chartjs-2";
+import {
   BookText,
   Check,
   Copy,
@@ -30,6 +41,8 @@ import { ScrollArea } from "./components/ui/scroll-area";
 import { Separator } from "./components/ui/separator";
 import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/utils";
+
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
 type Page = "home" | "history" | "dictionary";
 type LangMode = "auto" | "zh-CN" | "en-US";
@@ -68,6 +81,7 @@ type HotkeySettings = {
 type OverlayStatePayload = {
   phase: "hidden" | "listening" | "thinking" | "ready";
   text?: string | null;
+  level?: number | null;
 };
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
@@ -90,6 +104,11 @@ const I18N = {
     featureOpenSource: "Open Source",
     featureOfflineFirst: "Offline First",
     featureByod: "BYOD",
+    statsDailyInputTitle: "每日输入文字统计（Demo）",
+    statsDailyInputDesc: "最近 14 天通过语音输入的字数趋势。",
+    statsToday: "今日",
+    statsDailyAvg: "日均",
+    statsUnitChars: "字",
     modelReady: "模型已就绪",
     modelInitializing: "初始化中",
     modelNotReady: "模型未就绪",
@@ -197,6 +216,11 @@ const I18N = {
     featureOpenSource: "Open Source",
     featureOfflineFirst: "Offline First",
     featureByod: "BYOD",
+    statsDailyInputTitle: "Daily Input Characters (Demo)",
+    statsDailyInputDesc: "Trend of characters typed by voice in the last 14 days.",
+    statsToday: "Today",
+    statsDailyAvg: "Daily Avg",
+    statsUnitChars: "chars",
     modelReady: "Model Ready",
     modelInitializing: "Initializing",
     modelNotReady: "Not Ready",
@@ -339,15 +363,37 @@ function localizedInitMessage(status: ModelInitStatus, uiLang: UiLang) {
   return status.message;
 }
 
+type DailyInputStat = {
+  dateLabel: string;
+  chars: number;
+};
+
+function buildDemoDailyInputStats(): DailyInputStat[] {
+  const seed = [520, 610, 460, 700, 830, 760, 910, 680, 740, 990, 840, 1120, 970, 1260];
+  const today = new Date();
+  return seed.map((chars, index) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - (seed.length - 1 - index));
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return {
+      dateLabel: `${mm}/${dd}`,
+      chars,
+    };
+  });
+}
+
 function OverlayWindowApp() {
   const [phase, setPhase] = useState<OverlayStatePayload["phase"]>("hidden");
   const [text, setText] = useState("");
+  const [level, setLevel] = useState(0);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<OverlayStatePayload>("overlay-state", (event) => {
       setPhase(event.payload.phase);
       setText(event.payload.text ?? "");
+      setLevel(Math.max(0, Math.min(1, Number(event.payload.level ?? 0))));
     }).then((fn) => {
       unlisten = fn;
     });
@@ -363,6 +409,7 @@ function OverlayWindowApp() {
   }
 
   const title = phase === "listening" ? "正在听..." : phase === "thinking" ? "识别中..." : "就绪";
+  const speakingActive = level > 0.1;
   return (
     <main className="h-screen w-screen bg-transparent p-0">
       <div
@@ -372,14 +419,37 @@ function OverlayWindowApp() {
         )}
       >
         <div className="flex h-full items-center justify-between gap-3">
-          <div className="text-xs font-semibold tracking-tight leading-none">{title}</div>
+          <div
+            className={cn(
+              "text-xs font-semibold tracking-tight leading-none transition-colors duration-100",
+              phase === "listening" && speakingActive ? "text-emerald-200" : "text-white"
+            )}
+          >
+            {title}
+          </div>
           {phase === "listening" ? (
-            <div className="flex items-center gap-1">
-              <span className="h-1.5 w-1 rounded-full bg-white animate-pulse" />
-              <span className="h-2 w-1 rounded-full bg-white animate-pulse [animation-delay:120ms]" />
-              <span className="h-2.5 w-1 rounded-full bg-white animate-pulse [animation-delay:220ms]" />
-              <span className="h-2 w-1 rounded-full bg-white animate-pulse [animation-delay:320ms]" />
-              <span className="h-1.5 w-1 rounded-full bg-white animate-pulse [animation-delay:420ms]" />
+            <div className="flex h-4 items-end gap-1">
+              {[0.55, 0.8, 1, 0.82, 0.58].map((factor, index) => {
+                const active = Math.max(0.1, Math.min(1, level * 1.45 * factor));
+                const heightPx = 4 + Math.round(active * 10);
+                const speakingBar = active > 0.22;
+                return (
+                  <span
+                    key={index}
+                    className={cn(
+                      "w-1 rounded-full transition-all duration-75",
+                      speakingBar ? "bg-emerald-300" : "bg-white"
+                    )}
+                    style={{
+                      height: `${heightPx}px`,
+                      opacity: 0.35 + active * 0.65,
+                      boxShadow: speakingBar
+                        ? "0 0 8px rgba(110, 231, 183, 0.7)"
+                        : "0 0 0 rgba(255,255,255,0)",
+                    }}
+                  />
+                );
+              })}
             </div>
           ) : (
             text && <div className="truncate text-[10px] text-white/80">{text}</div>
@@ -438,6 +508,12 @@ function MainApp() {
   });
   const suppressDictationUntilRef = useRef(0);
   const suppressTranslationUntilRef = useRef(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const levelBufferRef = useRef<Uint8Array | null>(null);
+  const overlayLevelTimerRef = useRef<number | null>(null);
+  const lastOverlayLevelSentAtRef = useRef(0);
+  const lastOverlayLevelRef = useRef(0);
 
   const selected = useMemo(
     () => recordings.find((item) => item.id === selectedId) ?? null,
@@ -547,11 +623,22 @@ function MainApp() {
   );
   const hasHotkeyConflicts = Boolean(dictationSystemConflict || translationSystemConflict || hasDuplicateHotkeys);
 
-  async function setOverlayState(phase: "listening" | "thinking" | "ready", text?: string) {
+  async function setOverlayState(
+    phase: "listening" | "thinking" | "ready",
+    text?: string,
+    level?: number,
+    silent?: boolean
+  ) {
     try {
-      await invoke("set_overlay_state", { phase, text: text ?? null });
+      if (typeof level === "number") {
+        await invoke("set_overlay_level", { phase, text: text ?? null, level });
+      } else {
+        await invoke("set_overlay_state", { phase, text: text ?? null });
+      }
     } catch (err) {
-      setTranscript(`[overlay] ${String(err)}`);
+      if (!silent) {
+        setTranscript(`[overlay] ${String(err)}`);
+      }
     }
   }
 
@@ -561,6 +648,64 @@ function MainApp() {
     } catch {
       // ignore
     }
+  }
+
+  function stopOverlayLevelMeter() {
+    if (overlayLevelTimerRef.current !== null) {
+      window.clearInterval(overlayLevelTimerRef.current);
+      overlayLevelTimerRef.current = null;
+    }
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+    levelBufferRef.current = null;
+    lastOverlayLevelRef.current = 0;
+    lastOverlayLevelSentAtRef.current = 0;
+  }
+
+  function startOverlayLevelMeter(stream: MediaStream) {
+    stopOverlayLevelMeter();
+    const AudioContextCtor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      return;
+    }
+    const ctx = new AudioContextCtor();
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.65;
+    src.connect(analyser);
+    const buffer = new Uint8Array(analyser.fftSize);
+    audioContextRef.current = ctx;
+    analyserRef.current = analyser;
+    levelBufferRef.current = buffer;
+
+    overlayLevelTimerRef.current = window.setInterval(() => {
+      if (!analyserRef.current || !levelBufferRef.current || !recordingByHotkeyRef.current || !isRecordingRef.current) {
+        return;
+      }
+      analyserRef.current.getByteTimeDomainData(levelBufferRef.current);
+      let sum = 0;
+      for (let i = 0; i < levelBufferRef.current.length; i += 1) {
+        const normalized = (levelBufferRef.current[i] - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / levelBufferRef.current.length);
+      const amplified = Math.min(1, rms * 6.5);
+      const prev = lastOverlayLevelRef.current;
+      const smoothed = lastOverlayLevelRef.current * 0.7 + amplified * 0.3;
+      lastOverlayLevelRef.current = smoothed;
+
+      const now = Date.now();
+      const shouldSend = Math.abs(smoothed - prev) > 0.025 || now - lastOverlayLevelSentAtRef.current > 160;
+      if (!shouldSend) {
+        return;
+      }
+      lastOverlayLevelSentAtRef.current = now;
+      void setOverlayState("listening", undefined, smoothed, true);
+    }, 80);
   }
 
   async function loadRecordings() {
@@ -619,6 +764,10 @@ function MainApp() {
   useEffect(() => {
     window.localStorage.setItem(TRANSLATION_TARGET_STORAGE_KEY, translationTargetLang);
   }, [translationTargetLang]);
+
+  useEffect(() => () => {
+    stopOverlayLevelMeter();
+  }, []);
 
   useEffect(() => {
     Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus(), loadGlobalShortcuts()]).catch((err) => {
@@ -803,6 +952,9 @@ function MainApp() {
     };
 
     recorder.start();
+    if (recordingByHotkeyRef.current) {
+      startOverlayLevelMeter(stream);
+    }
     isRecordingRef.current = true;
     setIsRecording(true);
   }
@@ -812,6 +964,7 @@ function MainApp() {
       recorderRef.current.stop();
     }
     streamRef.current?.getTracks().forEach((track) => track.stop());
+    stopOverlayLevelMeter();
     streamRef.current = null;
     recorderRef.current = null;
     isRecordingRef.current = false;
@@ -1148,6 +1301,68 @@ function MainApp() {
     { key: "history", label: t("navHistory"), icon: History },
     { key: "dictionary", label: t("navDictionary"), icon: BookText },
   ];
+  const dailyInputStats = useMemo(() => buildDemoDailyInputStats(), []);
+  const dailyInputToday = dailyInputStats[dailyInputStats.length - 1]?.chars ?? 0;
+  const dailyInputAvg = Math.round(
+    dailyInputStats.reduce((acc, item) => acc + item.chars, 0) / Math.max(1, dailyInputStats.length)
+  );
+  const dailyInputChartData = useMemo(
+    () => ({
+      labels: dailyInputStats.map((item) => item.dateLabel),
+      datasets: [
+        {
+          label: t("statsDailyInputTitle"),
+          data: dailyInputStats.map((item) => item.chars),
+          borderColor: "rgb(37, 99, 235)",
+          backgroundColor: "rgba(37, 99, 235, 0.16)",
+          tension: 0.3,
+          fill: true,
+          pointRadius: 2.5,
+          pointHoverRadius: 4,
+        },
+      ],
+    }),
+    [dailyInputStats, t]
+  );
+  const dailyInputChartOptions = useMemo(
+    () => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: false,
+        },
+        tooltip: {
+          callbacks: {
+            label: (ctx: any) => `${ctx.parsed?.y ?? 0} ${t("statsUnitChars")}`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: {
+            color: "rgba(148, 163, 184, 0.18)",
+          },
+          ticks: {
+            maxRotation: 0,
+            color: "#64748b",
+            font: { size: 11 },
+          },
+        },
+        y: {
+          beginAtZero: true,
+          grid: {
+            color: "rgba(148, 163, 184, 0.18)",
+          },
+          ticks: {
+            color: "#64748b",
+            font: { size: 11 },
+          },
+        },
+      },
+    }),
+    [t]
+  );
 
   return (
     <main className="h-screen bg-[radial-gradient(circle_at_top_left,_#edf4ff,_#f8fafc_50%,_#eef7ff)] p-0 text-slate-900">
@@ -1212,7 +1427,7 @@ function MainApp() {
                 </Badge>
               </header>
 
-              {accessibility.supported && (
+              {accessibility.supported && !accessibility.trusted && (
                 <Card className="p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -1235,47 +1450,75 @@ function MainApp() {
                 </Card>
               )}
 
-              <Card className="p-4">
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  <Button
-                    className={cn(
-                      "h-11 rounded-xl px-4 inline-flex items-center gap-2 shadow-sm",
-                      isRecording
-                        ? "bg-red-600 hover:bg-red-700 border-red-600 hover:border-red-700"
-                        : "bg-slate-900 hover:bg-slate-800 border-slate-900 hover:border-slate-800"
-                    )}
-                    onClick={onRecordClick}
-                    disabled={isBusy || initStatus.running}
-                  >
-                    <Mic size={16} />
-                    <span className={cn("inline-block h-2 w-2 rounded-full bg-white/90", isRecording ? "animate-pulse" : "opacity-70")} />
-                    {isRecording ? t("stopRecording") : t("startRecording")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="inline-flex items-center gap-2"
-                    onClick={onInitModel}
-                    disabled={isBusy || initStatus.running}
-                  >
-                    {initStatus.running ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
-                    {initStatus.running ? t("initModelRunning") : modelReady ? t("initModelReady") : t("initModelStart")}
-                  </Button>
-                  <Button variant="outline" onClick={() => setPage("history")}>{t("viewHistory")}</Button>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="text-sm text-slate-700 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis">
-                    {localizedInitMessage(initStatus, uiLang)}
+              {(!modelReady || initStatus.running) && (
+                <Card className="p-4">
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <Button
+                      className={cn(
+                        "h-11 rounded-xl px-4 inline-flex items-center gap-2 shadow-sm",
+                        isRecording
+                          ? "bg-red-600 hover:bg-red-700 border-red-600 hover:border-red-700"
+                          : "bg-slate-900 hover:bg-slate-800 border-slate-900 hover:border-slate-800"
+                      )}
+                      onClick={onRecordClick}
+                      disabled={isBusy || initStatus.running}
+                    >
+                      <Mic size={16} />
+                      <span className={cn("inline-block h-2 w-2 rounded-full bg-white/90", isRecording ? "animate-pulse" : "opacity-70")} />
+                      {isRecording ? t("stopRecording") : t("startRecording")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="inline-flex items-center gap-2"
+                      onClick={onInitModel}
+                      disabled={isBusy || initStatus.running}
+                    >
+                      {initStatus.running ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
+                      {initStatus.running ? t("initModelRunning") : modelReady ? t("initModelReady") : t("initModelStart")}
+                    </Button>
+                    <Button variant="outline" onClick={() => setPage("history")}>{t("viewHistory")}</Button>
                   </div>
-                  <Progress value={Math.min(100, Math.max(0, initStatus.progress))} />
-                  {initStatus.error && <div className="text-xs text-red-600">{initStatus.error}</div>}
-                </div>
 
-                <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600">
-                  <div>{t("settingsHotkeyDictation")}: <span className="font-semibold text-slate-800">{hotkeyDictation}</span></div>
-                  <div className="mt-1">{t("settingsHotkeyTranslation")}: <span className="font-semibold text-slate-800">{hotkeyTranslation}</span></div>
-                  <div className="mt-1">{t("settingsTriggerMode")}: <span className="font-semibold text-slate-800">{triggerMode === "tap" ? t("settingsTriggerModeTap") : t("settingsTriggerModeLongPress")}</span></div>
-                  <div className="mt-1">{t("settingsOutputMode")}: <span className="font-semibold text-slate-800">{outputMode === "auto-paste" ? t("settingsOutputModeAutoPaste") : outputMode === "paste-and-keep" ? t("settingsOutputModePasteAndKeep") : t("settingsOutputModeCopyOnly")}</span></div>
+                  <div className="space-y-2">
+                    <div className="text-sm text-slate-700 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis">
+                      {localizedInitMessage(initStatus, uiLang)}
+                    </div>
+                    <Progress value={Math.min(100, Math.max(0, initStatus.progress))} />
+                    {initStatus.error && <div className="text-xs text-red-600">{initStatus.error}</div>}
+                  </div>
+
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600">
+                    <div>{t("settingsHotkeyDictation")}: <span className="font-semibold text-slate-800">{hotkeyDictation}</span></div>
+                    <div className="mt-1">{t("settingsHotkeyTranslation")}: <span className="font-semibold text-slate-800">{hotkeyTranslation}</span></div>
+                    <div className="mt-1">{t("settingsTriggerMode")}: <span className="font-semibold text-slate-800">{triggerMode === "tap" ? t("settingsTriggerModeTap") : t("settingsTriggerModeLongPress")}</span></div>
+                    <div className="mt-1">{t("settingsOutputMode")}: <span className="font-semibold text-slate-800">{outputMode === "auto-paste" ? t("settingsOutputModeAutoPaste") : outputMode === "paste-and-keep" ? t("settingsOutputModePasteAndKeep") : t("settingsOutputModeCopyOnly")}</span></div>
+                  </div>
+                </Card>
+              )}
+
+              <Card className="p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">{t("statsDailyInputTitle")}</div>
+                    <p className="mt-1 text-sm text-slate-600">{t("statsDailyInputDesc")}</p>
+                  </div>
+                  <div className="flex gap-2 text-xs">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
+                      <div className="text-slate-500">{t("statsToday")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">
+                        {dailyInputToday} {t("statsUnitChars")}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
+                      <div className="text-slate-500">{t("statsDailyAvg")}</div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">
+                        {dailyInputAvg} {t("statsUnitChars")}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="h-[220px] w-full">
+                  <Line data={dailyInputChartData} options={dailyInputChartOptions} />
                 </div>
               </Card>
 
