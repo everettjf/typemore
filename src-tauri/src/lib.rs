@@ -26,10 +26,12 @@ const INIT_EVENT: &str = "model-init-progress";
 const HOTKEY_EVENT: &str = "global-shortcut-triggered";
 const OVERLAY_EVENT: &str = "overlay-state";
 const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Alt+Space";
+const HOTKEY_TOGGLE_TRANSLATION: &str = "CommandOrControl+Alt+Enter";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 210.0;
 const OVERLAY_HEIGHT: f64 = 25.0;
 const OVERLAY_BOTTOM_MARGIN: i32 = 150;
+const OVERLAY_TOP_MARGIN: i32 = 90;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -49,12 +51,21 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
         const STATE_COMBINED_SESSION: i32 = 0;
         // macOS virtual keycode for Fn/Globe.
         const KEYCODE_FN: u16 = 63;
+        const KEYCODE_LEFT_SHIFT: u16 = 56;
+        const KEYCODE_RIGHT_SHIFT: u16 = 60;
 
         let mut was_down = false;
+        let mut active_action: Option<&'static str> = None;
         loop {
             let is_down = unsafe {
                 CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_FN)
                     || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_FN)
+            };
+            let shift_down = unsafe {
+                CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_LEFT_SHIFT)
+                    || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_LEFT_SHIFT)
+                    || CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_RIGHT_SHIFT)
+                    || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_RIGHT_SHIFT)
             };
             if is_down && !was_down {
                 let fn_enabled = app_handle
@@ -64,13 +75,18 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                     .map(|v| *v)
                     .unwrap_or(false);
                 if fn_enabled {
-                    let _ = app_handle.emit(
-                        HOTKEY_EVENT,
-                        GlobalShortcutPayload {
-                            action: "toggle-dictation".to_string(),
-                            shortcut: "Fn".to_string(),
-                        },
-                    );
+                    let action = if shift_down {
+                        "toggle-translation"
+                    } else {
+                        "toggle-dictation"
+                    };
+                    active_action = Some(action);
+                    let shortcut = if shift_down { "Fn+Shift" } else { "Fn" };
+                    emit_hotkey_event(&app_handle, action, shortcut, "pressed");
+                }
+            } else if !is_down && was_down {
+                if let Some(action) = active_action.take() {
+                    emit_hotkey_event(&app_handle, action, "Fn", "released");
                 }
             }
             was_down = is_down;
@@ -111,6 +127,7 @@ struct AccessibilityStatus {
 struct GlobalShortcutPayload {
     action: String,
     shortcut: String,
+    state: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,27 +172,73 @@ struct AppState {
     init_status: Mutex<ModelInitStatus>,
     hotkeys: Mutex<HotkeyConfig>,
     fn_key_enabled: Mutex<bool>,
+    trigger_mode: Mutex<HotkeyTriggerMode>,
+    overlay_position: Mutex<OverlayPosition>,
+    output_mode: Mutex<OutputMode>,
+    hotkey_runtime: Mutex<HotkeyRuntimeState>,
 }
 
 #[derive(Debug, Clone)]
 struct HotkeyConfig {
-    toggle: String,
-    toggle_id: u32,
+    dictation: String,
+    dictation_id: u32,
+    translation: String,
+    translation_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum HotkeyTriggerMode {
+    Tap,
+    LongPress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum OverlayPosition {
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum OutputMode {
+    AutoPaste,
+    PasteAndKeep,
+    CopyOnly,
+}
+
+#[derive(Debug, Clone)]
+struct HotkeyRuntimeState {
+    suppress_dictation_until: Option<Instant>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HotkeySettings {
-    toggle: String,
+    dictation: String,
+    translation: String,
     fn_enabled: bool,
+    trigger_mode: HotkeyTriggerMode,
+    overlay_position: OverlayPosition,
+    output_mode: OutputMode,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedHotkeySettings {
-    toggle: String,
+    #[serde(default = "default_hotkey_dictation", alias = "toggle")]
+    dictation: String,
+    #[serde(default = "default_hotkey_translation")]
+    translation: String,
     #[serde(default = "default_fn_key_enabled")]
     fn_enabled: bool,
+    #[serde(default = "default_trigger_mode")]
+    trigger_mode: HotkeyTriggerMode,
+    #[serde(default = "default_overlay_position")]
+    overlay_position: OverlayPosition,
+    #[serde(default = "default_output_mode")]
+    output_mode: OutputMode,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -185,14 +248,50 @@ struct OverlayStatePayload {
     text: Option<String>,
 }
 
+fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str) {
+    if state == "pressed" {
+        let now = Instant::now();
+        let state_guard = app.state::<AppState>();
+        let Ok(mut runtime) = state_guard.hotkey_runtime.lock() else {
+            return;
+        };
+        if action == "toggle-translation" {
+            runtime.suppress_dictation_until =
+                Some(now + std::time::Duration::from_millis(260));
+        } else if action == "toggle-dictation"
+            && runtime
+                .suppress_dictation_until
+                .is_some_and(|until| now < until)
+        {
+            return;
+        }
+    }
+
+    let _ = app.emit(
+        HOTKEY_EVENT,
+        GlobalShortcutPayload {
+            action: action.to_string(),
+            shortcut: shortcut.to_string(),
+            state: state.to_string(),
+        },
+    );
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
             init_status: Mutex::new(ModelInitStatus::default()),
             hotkeys: Mutex::new(
-                build_hotkey_config(HOTKEY_TOGGLE_DICTATION).expect("invalid default hotkeys"),
+                build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)
+                    .expect("invalid default hotkeys"),
             ),
             fn_key_enabled: Mutex::new(default_fn_key_enabled()),
+            trigger_mode: Mutex::new(default_trigger_mode()),
+            overlay_position: Mutex::new(default_overlay_position()),
+            output_mode: Mutex::new(default_output_mode()),
+            hotkey_runtime: Mutex::new(HotkeyRuntimeState {
+                suppress_dictation_until: None,
+            }),
         }
     }
 }
@@ -210,17 +309,47 @@ const fn default_fn_key_enabled() -> bool {
     true
 }
 
-fn build_hotkey_config(toggle: &str) -> Result<HotkeyConfig, String> {
-    let toggle_shortcut: tauri_plugin_global_shortcut::Shortcut = toggle
+fn default_hotkey_dictation() -> String {
+    HOTKEY_TOGGLE_DICTATION.to_string()
+}
+
+fn default_hotkey_translation() -> String {
+    HOTKEY_TOGGLE_TRANSLATION.to_string()
+}
+
+const fn default_trigger_mode() -> HotkeyTriggerMode {
+    HotkeyTriggerMode::Tap
+}
+
+const fn default_overlay_position() -> OverlayPosition {
+    OverlayPosition::Bottom
+}
+
+const fn default_output_mode() -> OutputMode {
+    OutputMode::AutoPaste
+}
+
+fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfig, String> {
+    if dictation == translation {
+        return Err("dictation and translation hotkeys must be different".into());
+    }
+
+    let dictation_shortcut: tauri_plugin_global_shortcut::Shortcut = dictation
         .parse()
-        .map_err(|e| format!("invalid toggle shortcut: {e}"))?;
+        .map_err(|e| format!("invalid dictation shortcut: {e}"))?;
+    let translation_shortcut: tauri_plugin_global_shortcut::Shortcut = translation
+        .parse()
+        .map_err(|e| format!("invalid translation shortcut: {e}"))?;
+
     Ok(HotkeyConfig {
-        toggle: toggle.to_string(),
-        toggle_id: toggle_shortcut.id(),
+        dictation: dictation.to_string(),
+        dictation_id: dictation_shortcut.id(),
+        translation: translation.to_string(),
+        translation_id: translation_shortcut.id(),
     })
 }
 
-fn apply_toggle_shortcut(app: &AppHandle, new_config: HotkeyConfig) -> Result<HotkeyConfig, String> {
+fn apply_hotkey_shortcuts(app: &AppHandle, new_config: HotkeyConfig) -> Result<HotkeyConfig, String> {
     let state = app.state::<AppState>();
     let old_config = {
         let lock = state
@@ -231,16 +360,30 @@ fn apply_toggle_shortcut(app: &AppHandle, new_config: HotkeyConfig) -> Result<Ho
     };
 
     let manager = app.global_shortcut();
-    if old_config.toggle != new_config.toggle && manager.is_registered(old_config.toggle.as_str()) {
+    if old_config.dictation != new_config.dictation
+        && manager.is_registered(old_config.dictation.as_str())
+    {
         manager
-            .unregister(old_config.toggle.as_str())
-            .map_err(|e| format!("failed to unregister old toggle shortcut: {e}"))?;
+            .unregister(old_config.dictation.as_str())
+            .map_err(|e| format!("failed to unregister old dictation shortcut: {e}"))?;
+    }
+    if old_config.translation != new_config.translation
+        && manager.is_registered(old_config.translation.as_str())
+    {
+        manager
+            .unregister(old_config.translation.as_str())
+            .map_err(|e| format!("failed to unregister old translation shortcut: {e}"))?;
     }
 
-    if !manager.is_registered(new_config.toggle.as_str()) {
+    if !manager.is_registered(new_config.dictation.as_str()) {
         manager
-            .register(new_config.toggle.as_str())
-            .map_err(|e| format!("failed to register toggle shortcut: {e}"))?;
+            .register(new_config.dictation.as_str())
+            .map_err(|e| format!("failed to register dictation shortcut: {e}"))?;
+    }
+    if !manager.is_registered(new_config.translation.as_str()) {
+        manager
+            .register(new_config.translation.as_str())
+            .map_err(|e| format!("failed to register translation shortcut: {e}"))?;
     }
 
     {
@@ -252,6 +395,61 @@ fn apply_toggle_shortcut(app: &AppHandle, new_config: HotkeyConfig) -> Result<Ho
     }
 
     Ok(new_config)
+}
+
+fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
+    let state = app.state::<AppState>();
+    let (dictation, translation) = {
+        let lock = state
+            .hotkeys
+            .lock()
+            .map_err(|_| "failed to read hotkey settings".to_string())?;
+        (lock.dictation.clone(), lock.translation.clone())
+    };
+    let fn_enabled = state
+        .fn_key_enabled
+        .lock()
+        .map_err(|_| "failed to read fn key settings".to_string())
+        .map(|v| *v)?;
+    let trigger_mode = state
+        .trigger_mode
+        .lock()
+        .map_err(|_| "failed to read trigger mode settings".to_string())
+        .map(|v| *v)?;
+    let overlay_position = state
+        .overlay_position
+        .lock()
+        .map_err(|_| "failed to read overlay position settings".to_string())
+        .map(|v| *v)?;
+    let output_mode = state
+        .output_mode
+        .lock()
+        .map_err(|_| "failed to read output mode settings".to_string())
+        .map(|v| *v)?;
+
+    Ok(HotkeySettings {
+        dictation,
+        translation,
+        fn_enabled,
+        trigger_mode,
+        overlay_position,
+        output_mode,
+    })
+}
+
+fn save_current_hotkey_settings(app: &AppHandle) -> Result<(), String> {
+    let current = collect_hotkey_settings(app)?;
+    save_persisted_hotkeys(
+        app,
+        &PersistedHotkeySettings {
+            dictation: current.dictation,
+            translation: current.translation,
+            fn_enabled: current.fn_enabled,
+            trigger_mode: current.trigger_mode,
+            overlay_position: current.overlay_position,
+            output_mode: current.output_mode,
+        },
+    )
 }
 
 fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -897,6 +1095,65 @@ fn save_recording_and_transcribe(
     Ok(SaveAndTranscribeResult { recording, text })
 }
 
+fn extract_google_translate_text(value: &serde_json::Value) -> Option<String> {
+    let segments = value.get(0)?.as_array()?;
+    let mut out = String::new();
+    for seg in segments {
+        if let Some(part) = seg.get(0).and_then(|v| v.as_str()) {
+            out.push_str(part);
+        }
+    }
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+#[tauri::command]
+fn translate_text_best_effort(text: String, target_lang: Option<String>) -> Result<String, String> {
+    let input = text.trim();
+    if input.is_empty() {
+        return Ok(String::new());
+    }
+    let target = target_lang
+        .unwrap_or_else(|| "en".to_string())
+        .trim()
+        .to_string();
+    if target.is_empty() {
+        return Err("target language cannot be empty".into());
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("failed to build translate client: {e}"))?;
+    let response = client
+        .get("https://translate.googleapis.com/translate_a/single")
+        .query(&[
+            ("client", "gtx"),
+            ("sl", "auto"),
+            ("tl", target.as_str()),
+            ("dt", "t"),
+            ("q", input),
+        ])
+        .send()
+        .map_err(|e| format!("translation request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "translation request failed with status {}",
+            response.status()
+        ));
+    }
+    let raw = response
+        .text()
+        .map_err(|e| format!("failed to read translation response: {e}"))?;
+    let json: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("failed to parse translation response: {e}"))?;
+    extract_google_translate_text(&json).ok_or_else(|| "translation response was empty".into())
+}
+
 #[tauri::command]
 fn open_temp_dir(app: AppHandle) -> Result<String, String> {
     let dir = temp_dir(&app)?;
@@ -1029,20 +1286,6 @@ fn open_accessibility_settings() -> Result<(), String> {
     Ok(())
 }
 
-fn escape_applescript_text(input: &str) -> String {
-    let mut escaped = String::new();
-    for ch in input.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '"' => escaped.push_str("\\\""),
-            '\n' => escaped.push_str("\" & return & \""),
-            '\r' => {}
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
 fn run_osascript(script: &str) -> Result<(), String> {
     let status = Command::new("osascript")
         .arg("-e")
@@ -1076,7 +1319,7 @@ fn pbcopy_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn type_text_via_paste(text: &str) -> Result<(), String> {
+fn type_text_via_paste(text: &str, keep_result_in_clipboard: bool, do_paste: bool) -> Result<(), String> {
     let previous_clipboard = Command::new("pbpaste")
         .output()
         .ok()
@@ -1084,32 +1327,41 @@ fn type_text_via_paste(text: &str) -> Result<(), String> {
         .map(|out| String::from_utf8_lossy(&out.stdout).to_string());
 
     pbcopy_text(text)?;
-    run_osascript("tell application \"System Events\" to keystroke \"v\" using command down")?;
+    if do_paste {
+        run_osascript("tell application \"System Events\" to keystroke \"v\" using command down")?;
+    }
 
-    if let Some(prev) = previous_clipboard {
-        let _ = pbcopy_text(&prev);
+    if !keep_result_in_clipboard {
+        if let Some(prev) = previous_clipboard {
+            let _ = pbcopy_text(&prev);
+        } else {
+            let _ = pbcopy_text("");
+        }
     }
     Ok(())
 }
 
 #[tauri::command]
-fn type_text_to_focused_app(text: String) -> Result<(), String> {
+fn type_text_to_focused_app(app: AppHandle, text: String) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
         return Err("type_text_to_focused_app is currently only supported on macOS".into());
     }
-    if !macos_is_accessibility_trusted() {
+    let output_mode = app
+        .state::<AppState>()
+        .output_mode
+        .lock()
+        .map_err(|_| "failed to read output mode settings".to_string())
+        .map(|v| *v)?;
+
+    let requires_accessibility = output_mode != OutputMode::CopyOnly;
+    if requires_accessibility && !macos_is_accessibility_trusted() {
         return Err("accessibility permission not granted".into());
     }
 
-    if text.is_ascii() {
-        let script = format!(
-            "tell application \"System Events\" to keystroke \"{}\"",
-            escape_applescript_text(&text)
-        );
-        run_osascript(&script)
-    } else {
-        // Non-ASCII input (e.g. Chinese) is more reliable via paste than keystroke.
-        type_text_via_paste(&text)
+    match output_mode {
+        OutputMode::AutoPaste => type_text_via_paste(&text, false, true),
+        OutputMode::PasteAndKeep => type_text_via_paste(&text, true, true),
+        OutputMode::CopyOnly => type_text_via_paste(&text, true, false),
     }
 }
 
@@ -1162,6 +1414,12 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
 
 fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Result<(), String> {
     let _ = overlay.set_size(Size::Logical(LogicalSize::new(OVERLAY_WIDTH, OVERLAY_HEIGHT)));
+    let overlay_position = app
+        .state::<AppState>()
+        .overlay_position
+        .lock()
+        .map_err(|_| "failed to read overlay position settings".to_string())
+        .map(|v| *v)?;
 
     let monitor = app
         .get_webview_window("main")
@@ -1174,7 +1432,12 @@ fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Resu
         let width = OVERLAY_WIDTH.round() as i32;
         let height = OVERLAY_HEIGHT.round() as i32;
         let x = monitor_pos.x + ((monitor_size.width as i32 - width) / 2).max(0);
-        let y = monitor_pos.y + (monitor_size.height as i32 - height - OVERLAY_BOTTOM_MARGIN).max(0);
+        let y = match overlay_position {
+            OverlayPosition::Bottom => {
+                monitor_pos.y + (monitor_size.height as i32 - height - OVERLAY_BOTTOM_MARGIN).max(0)
+            }
+            OverlayPosition::Top => monitor_pos.y + OVERLAY_TOP_MARGIN.max(0),
+        };
         let _ = overlay.set_position(Position::Physical(PhysicalPosition::new(x, y)));
     }
 
@@ -1226,46 +1489,43 @@ fn emit_overlay_state(app: &AppHandle, phase: &str, text: Option<String>) -> Res
 
 #[tauri::command]
 fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
-    let state = app.state::<AppState>();
-    let toggle = state
-        .hotkeys
-        .lock()
-        .map_err(|_| "failed to read hotkey settings".to_string())
-        .map(|v| v.toggle.clone())?;
-    let fn_enabled = state
-        .fn_key_enabled
-        .lock()
-        .map_err(|_| "failed to read fn key settings".to_string())
-        .map(|v| *v)?;
-    Ok(HotkeySettings {
-        toggle,
-        fn_enabled,
-    })
+    collect_hotkey_settings(&app)
 }
 
 #[tauri::command]
-fn set_global_shortcuts(app: AppHandle, toggle: String) -> Result<HotkeySettings, String> {
-    let new_config = build_hotkey_config(&toggle)?;
-    let applied = apply_toggle_shortcut(&app, new_config)?;
-    let fn_enabled = app
-        .state::<AppState>()
-        .fn_key_enabled
-        .lock()
-        .map_err(|_| "failed to read fn key settings".to_string())
-        .map(|v| *v)?;
+fn set_global_shortcuts(
+    app: AppHandle,
+    dictation: String,
+    translation: String,
+    trigger_mode: HotkeyTriggerMode,
+    overlay_position: OverlayPosition,
+    output_mode: OutputMode,
+) -> Result<HotkeySettings, String> {
+    let new_config = build_hotkey_config(&dictation, &translation)?;
+    let _applied = apply_hotkey_shortcuts(&app, new_config)?;
+    {
+        let state = app.state::<AppState>();
+        let mut trigger_lock = state
+            .trigger_mode
+            .lock()
+            .map_err(|_| "failed to update trigger mode settings".to_string())?;
+        *trigger_lock = trigger_mode;
+        drop(trigger_lock);
+        let mut overlay_lock = state
+            .overlay_position
+            .lock()
+            .map_err(|_| "failed to update overlay position settings".to_string())?;
+        *overlay_lock = overlay_position;
+        drop(overlay_lock);
+        let mut output_lock = state
+            .output_mode
+            .lock()
+            .map_err(|_| "failed to update output mode settings".to_string())?;
+        *output_lock = output_mode;
+    }
 
-    save_persisted_hotkeys(
-        &app,
-        &PersistedHotkeySettings {
-            toggle: applied.toggle.clone(),
-            fn_enabled,
-        },
-    )?;
-
-    Ok(HotkeySettings {
-        toggle: applied.toggle,
-        fn_enabled,
-    })
+    save_current_hotkey_settings(&app)?;
+    collect_hotkey_settings(&app)
 }
 
 #[tauri::command]
@@ -1279,24 +1539,8 @@ fn set_fn_key_enabled(app: AppHandle, enabled: bool) -> Result<HotkeySettings, S
         *lock = enabled;
     }
 
-    let toggle = state
-        .hotkeys
-        .lock()
-        .map_err(|_| "failed to read hotkey settings".to_string())
-        .map(|v| v.toggle.clone())?;
-
-    save_persisted_hotkeys(
-        &app,
-        &PersistedHotkeySettings {
-            toggle: toggle.clone(),
-            fn_enabled: enabled,
-        },
-    )?;
-
-    Ok(HotkeySettings {
-        toggle,
-        fn_enabled: enabled,
-    })
+    save_current_hotkey_settings(&app)?;
+    collect_hotkey_settings(&app)
 }
 
 #[tauri::command]
@@ -1316,25 +1560,22 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event: ShortcutEvent| {
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-                    let state = app.state::<AppState>();
-                    let Ok(lock) = state.hotkeys.lock() else {
+                    let state = match event.state {
+                        ShortcutState::Pressed => "pressed",
+                        ShortcutState::Released => "released",
+                    };
+                    let state_ref = app.state::<AppState>();
+                    let Ok(lock) = state_ref.hotkeys.lock() else {
                         return;
                     };
-                    let action = if shortcut.id() == lock.toggle_id {
+                    let action = if shortcut.id() == lock.dictation_id {
                         "toggle-dictation"
+                    } else if shortcut.id() == lock.translation_id {
+                        "toggle-translation"
                     } else {
                         return;
                     };
-                    let _ = app.emit(
-                        HOTKEY_EVENT,
-                        GlobalShortcutPayload {
-                            action: action.to_string(),
-                            shortcut: shortcut.to_string(),
-                        },
-                    );
+                    emit_hotkey_event(app, action, &shortcut.to_string(), state);
                 })
                 .build(),
         )
@@ -1345,51 +1586,62 @@ pub fn run() {
                 .as_ref()
                 .map(|saved| saved.fn_enabled)
                 .unwrap_or_else(default_fn_key_enabled);
+            let trigger_mode = persisted
+                .as_ref()
+                .map(|saved| saved.trigger_mode)
+                .unwrap_or_else(default_trigger_mode);
+            let overlay_position = persisted
+                .as_ref()
+                .map(|saved| saved.overlay_position)
+                .unwrap_or_else(default_overlay_position);
+            let output_mode = persisted
+                .as_ref()
+                .map(|saved| saved.output_mode)
+                .unwrap_or_else(default_output_mode);
 
             let desired_cfg = match persisted {
-                Some(saved) => match build_hotkey_config(&saved.toggle) {
+                Some(saved) => match build_hotkey_config(&saved.dictation, &saved.translation) {
                     Ok(cfg) => cfg,
                     Err(err) => {
                         eprintln!(
-                            "[typemore] invalid persisted hotkey '{}', fallback to default: {}",
-                            saved.toggle, err
+                            "[typemore] invalid persisted hotkeys ('{}', '{}'), fallback to default: {}",
+                            saved.dictation, saved.translation, err
                         );
-                        build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?
+                        build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?
                     }
                 },
-                None => build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?,
+                None => build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?,
             };
 
-            if let Err(err) = apply_toggle_shortcut(app.handle(), desired_cfg.clone()) {
+            if let Err(err) = apply_hotkey_shortcuts(app.handle(), desired_cfg.clone()) {
                 eprintln!(
-                    "[typemore] failed to register hotkey '{}': {}. fallback to default",
-                    desired_cfg.toggle, err
+                    "[typemore] failed to register hotkeys ('{}', '{}'): {}. fallback to default",
+                    desired_cfg.dictation, desired_cfg.translation, err
                 );
-                let fallback = build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?;
-                apply_toggle_shortcut(app.handle(), fallback.clone())?;
-                save_persisted_hotkeys(
-                    app.handle(),
-                    &PersistedHotkeySettings {
-                        toggle: fallback.toggle,
-                        fn_enabled,
-                    },
-                )?;
-            } else if desired_cfg.toggle != HOTKEY_TOGGLE_DICTATION {
-                let _ = save_persisted_hotkeys(
-                    app.handle(),
-                    &PersistedHotkeySettings {
-                        toggle: desired_cfg.toggle,
-                        fn_enabled,
-                    },
-                );
+                let fallback =
+                    build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?;
+                apply_hotkey_shortcuts(app.handle(), fallback)?;
             }
 
             if let Ok(lock) = app.state::<AppState>().hotkeys.lock() {
-                eprintln!("[typemore] active hotkey: {}", lock.toggle);
+                eprintln!(
+                    "[typemore] active hotkeys: dictation='{}', translation='{}'",
+                    lock.dictation, lock.translation
+                );
             }
             if let Ok(mut lock) = app.state::<AppState>().fn_key_enabled.lock() {
                 *lock = fn_enabled;
             }
+            if let Ok(mut lock) = app.state::<AppState>().trigger_mode.lock() {
+                *lock = trigger_mode;
+            }
+            if let Ok(mut lock) = app.state::<AppState>().overlay_position.lock() {
+                *lock = overlay_position;
+            }
+            if let Ok(mut lock) = app.state::<AppState>().output_mode.lock() {
+                *lock = output_mode;
+            }
+            let _ = save_current_hotkey_settings(app.handle());
             eprintln!("[typemore] fn key enabled: {}", fn_enabled);
 
             #[cfg(target_os = "macos")]
@@ -1421,6 +1673,7 @@ pub fn run() {
             get_recording_cached_transcript,
             transcribe_recording,
             save_recording_and_transcribe,
+            translate_text_best_effort,
             open_temp_dir,
             get_accessibility_status,
             request_accessibility_permission,

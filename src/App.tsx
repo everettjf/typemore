@@ -34,7 +34,13 @@ import { cn } from "./lib/utils";
 type Page = "home" | "history" | "dictionary";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
-type CaptureTarget = "toggle" | null;
+type CaptureTarget = "dictation" | "translation" | null;
+type HotkeyAction = "toggle-dictation" | "toggle-translation";
+type HotkeyEventState = "pressed" | "released";
+type HotkeyTriggerMode = "tap" | "long-press";
+type OverlayPosition = "top" | "bottom";
+type OutputMode = "auto-paste" | "paste-and-keep" | "copy-only";
+type TranslationTargetLang = "auto" | "en" | "zh-CN" | "ja" | "ko";
 
 type AccessibilityStatus = {
   supported: boolean;
@@ -45,13 +51,18 @@ type AccessibilityStatus = {
 };
 
 type GlobalShortcutPayload = {
-  action: "toggle-dictation";
+  action: HotkeyAction;
   shortcut: string;
+  state: HotkeyEventState;
 };
 
 type HotkeySettings = {
-  toggle: string;
+  dictation: string;
+  translation: string;
   fnEnabled: boolean;
+  triggerMode: HotkeyTriggerMode;
+  overlayPosition: OverlayPosition;
+  outputMode: OutputMode;
 };
 
 type OverlayStatePayload = {
@@ -61,7 +72,12 @@ type OverlayStatePayload = {
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
-const DEFAULT_HOTKEY_TOGGLE = "CommandOrControl+Alt+Space";
+const TRANSLATION_TARGET_STORAGE_KEY = "typemore.translation.target";
+const DEFAULT_HOTKEY_DICTATION = "CommandOrControl+Alt+Space";
+const DEFAULT_HOTKEY_TRANSLATION = "CommandOrControl+Alt+Enter";
+const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
+const DEFAULT_OVERLAY_POSITION: OverlayPosition = "bottom";
+const DEFAULT_OUTPUT_MODE: OutputMode = "auto-paste";
 
 const I18N = {
   zh: {
@@ -108,8 +124,9 @@ const I18N = {
     settingsLanguageTitle: "语言",
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
     settingsHotkeyTitle: "全局快捷键",
-    settingsHotkeyDesc: "单快捷键模式：第一次按开始录音，第二次按停止并自动识别与尝试输入。另支持 Fn 单键切换录音。",
-    settingsHotkeyToggle: "语音输入快捷键",
+    settingsHotkeyDesc: "支持点按切换（按一次开始/停止）和长按模式（按下开始、松开停止）。",
+    settingsHotkeyDictation: "听写快捷键",
+    settingsHotkeyTranslation: "翻译快捷键",
     settingsFnKeyToggle: "启用 Fn 单键切换录音（macOS）",
     settingsHotkeyTogglePlaceholder: "例如: CommandOrControl+Alt+Space",
     settingsHotkeySave: "保存快捷键",
@@ -117,6 +134,26 @@ const I18N = {
     settingsHotkeyRecord: "录制",
     settingsHotkeyRecording: "录制中...",
     settingsHotkeyPressHint: "点击“录制”后直接按组合键；按 Esc 取消。",
+    settingsTriggerMode: "触发模式",
+    settingsTriggerModeTap: "点按切换",
+    settingsTriggerModeLongPress: "长按松开结束",
+    settingsOverlayPosition: "悬浮窗位置",
+    settingsOverlayPositionTop: "顶部",
+    settingsOverlayPositionBottom: "底部",
+    settingsOutputMode: "发送方式",
+    settingsOutputModeAutoPaste: "自动粘贴并恢复剪贴板",
+    settingsOutputModePasteAndKeep: "自动粘贴并保留结果到剪贴板",
+    settingsOutputModeCopyOnly: "仅复制到剪贴板（不自动粘贴）",
+    settingsHotkeyConflictTitle: "快捷键冲突",
+    settingsHotkeyConflictSame: "听写快捷键与翻译快捷键不能相同。",
+    settingsHotkeyConflictWithSystem: "与系统常用快捷键冲突：{value}",
+    settingsHotkeyWarningSaveBlocked: "请先修复冲突再保存。",
+    settingsTranslationTarget: "翻译目标语言",
+    settingsTranslationTargetAuto: "自动（中英互转）",
+    settingsTranslationTargetEn: "英文",
+    settingsTranslationTargetZh: "中文",
+    settingsTranslationTargetJa: "日文",
+    settingsTranslationTargetKo: "韩文",
     languageModeLabel: "界面语言",
     langAuto: "自动（跟随系统）",
     langZh: "中文",
@@ -143,6 +180,8 @@ const I18N = {
     transcriptOpenTempDirOk: "已打开临时目录: {dir}",
     transcriptOpenTempDirFailed: "打开临时目录失败: {error}",
     transcriptTypeFailed: "输入到当前应用失败: {error}",
+    transcriptTranslating: "翻译中...",
+    transcriptTranslationFailed: "翻译失败，已回退原文: {error}",
     fallbackTitle: "未能自动输入",
     fallbackDesc: "请点击复制后手动粘贴到目标输入框。",
     fallbackCopy: "复制识别结果",
@@ -192,8 +231,9 @@ const I18N = {
     settingsLanguageTitle: "Language",
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
     settingsHotkeyTitle: "Global Hotkey",
-    settingsHotkeyDesc: "Single-hotkey mode: first press starts recording, second press stops and auto-transcribes + tries typing. Fn key toggle is also supported.",
-    settingsHotkeyToggle: "Dictation hotkey",
+    settingsHotkeyDesc: "Supports tap-toggle and long-press mode (press to start, release to stop).",
+    settingsHotkeyDictation: "Dictation hotkey",
+    settingsHotkeyTranslation: "Translation hotkey",
     settingsFnKeyToggle: "Enable Fn one-key dictation toggle (macOS)",
     settingsHotkeyTogglePlaceholder: "e.g. CommandOrControl+Alt+Space",
     settingsHotkeySave: "Save hotkey",
@@ -201,6 +241,26 @@ const I18N = {
     settingsHotkeyRecord: "Record",
     settingsHotkeyRecording: "Recording...",
     settingsHotkeyPressHint: "Click Record then press combo. Press Esc to cancel.",
+    settingsTriggerMode: "Trigger mode",
+    settingsTriggerModeTap: "Tap to toggle",
+    settingsTriggerModeLongPress: "Long press, release to stop",
+    settingsOverlayPosition: "Overlay position",
+    settingsOverlayPositionTop: "Top",
+    settingsOverlayPositionBottom: "Bottom",
+    settingsOutputMode: "Output mode",
+    settingsOutputModeAutoPaste: "Auto-paste and restore previous clipboard",
+    settingsOutputModePasteAndKeep: "Auto-paste and keep result in clipboard",
+    settingsOutputModeCopyOnly: "Copy-only (no auto-paste)",
+    settingsHotkeyConflictTitle: "Hotkey conflicts",
+    settingsHotkeyConflictSame: "Dictation and translation hotkeys must be different.",
+    settingsHotkeyConflictWithSystem: "Conflicts with common system shortcut: {value}",
+    settingsHotkeyWarningSaveBlocked: "Resolve conflicts before saving.",
+    settingsTranslationTarget: "Translation target",
+    settingsTranslationTargetAuto: "Auto (ZH <-> EN)",
+    settingsTranslationTargetEn: "English",
+    settingsTranslationTargetZh: "Chinese",
+    settingsTranslationTargetJa: "Japanese",
+    settingsTranslationTargetKo: "Korean",
     languageModeLabel: "Interface language",
     langAuto: "Auto (System)",
     langZh: "Chinese",
@@ -227,6 +287,8 @@ const I18N = {
     transcriptOpenTempDirOk: "Opened temporary directory: {dir}",
     transcriptOpenTempDirFailed: "Failed to open temporary directory: {error}",
     transcriptTypeFailed: "Failed to type into focused app: {error}",
+    transcriptTranslating: "Translating...",
+    transcriptTranslationFailed: "Translation failed, fallback to original text: {error}",
     fallbackTitle: "Auto typing failed",
     fallbackDesc: "Copy the result and paste it to your target input manually.",
     fallbackCopy: "Copy transcription",
@@ -303,7 +365,12 @@ function OverlayWindowApp() {
   const title = phase === "listening" ? "正在听..." : phase === "thinking" ? "识别中..." : "就绪";
   return (
     <main className="h-screen w-screen bg-transparent p-0">
-      <div className="h-full w-full overflow-hidden rounded-lg border border-white/20 bg-black/90 px-2 text-white shadow-2xl">
+      <div
+        className={cn(
+          "h-full w-full overflow-hidden rounded-lg border border-white/20 bg-black/90 px-2 text-white shadow-2xl transition-opacity duration-300",
+          phase === "ready" ? "opacity-95" : "opacity-100"
+        )}
+      >
         <div className="flex h-full items-center justify-between gap-3">
           <div className="text-xs font-semibold tracking-tight leading-none">{title}</div>
           {phase === "listening" ? (
@@ -340,8 +407,16 @@ function MainApp() {
     return raw === "zh-CN" || raw === "en-US" || raw === "auto" ? raw : "auto";
   });
   const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
-  const [hotkeyToggle, setHotkeyToggle] = useState(DEFAULT_HOTKEY_TOGGLE);
+  const [hotkeyDictation, setHotkeyDictation] = useState(DEFAULT_HOTKEY_DICTATION);
+  const [hotkeyTranslation, setHotkeyTranslation] = useState(DEFAULT_HOTKEY_TRANSLATION);
   const [fnKeyEnabled, setFnKeyEnabled] = useState(true);
+  const [triggerMode, setTriggerMode] = useState<HotkeyTriggerMode>(DEFAULT_TRIGGER_MODE);
+  const [overlayPosition, setOverlayPosition] = useState<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
+  const [outputMode, setOutputMode] = useState<OutputMode>(DEFAULT_OUTPUT_MODE);
+  const [translationTargetLang, setTranslationTargetLang] = useState<TranslationTargetLang>(() => {
+    const raw = window.localStorage.getItem(TRANSLATION_TARGET_STORAGE_KEY);
+    return raw === "auto" || raw === "en" || raw === "zh-CN" || raw === "ja" || raw === "ko" ? raw : "auto";
+  });
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
@@ -352,7 +427,17 @@ function MainApp() {
   const isRecordingRef = useRef(false);
   const modelReadyRef = useRef(false);
   const recordingByHotkeyRef = useRef(false);
-  const lastHotkeyAtRef = useRef(0);
+  const triggerModeRef = useRef<HotkeyTriggerMode>(DEFAULT_TRIGGER_MODE);
+  const activeHoldActionRef = useRef<HotkeyAction | null>(null);
+  const activeHotkeyActionRef = useRef<HotkeyAction | null>(null);
+  const pendingStartActionRef = useRef<HotkeyAction | null>(null);
+  const cancelAfterStartActionRef = useRef<HotkeyAction | null>(null);
+  const lastPressedAtRef = useRef<Record<HotkeyAction, number>>({
+    "toggle-dictation": 0,
+    "toggle-translation": 0,
+  });
+  const suppressDictationUntilRef = useRef(0);
+  const suppressTranslationUntilRef = useRef(0);
 
   const selected = useMemo(
     () => recordings.find((item) => item.id === selectedId) ?? null,
@@ -368,6 +453,10 @@ function MainApp() {
   useEffect(() => {
     modelReadyRef.current = modelReady;
   }, [modelReady]);
+
+  useEffect(() => {
+    triggerModeRef.current = triggerMode;
+  }, [triggerMode]);
 
   const uiLang: UiLang = useMemo(() => {
     if (langMode === "zh-CN") {
@@ -387,6 +476,30 @@ function MainApp() {
 
   function normalizeHotkeyLabel(value: string) {
     return value.replace(/CommandOrControl/g, "Cmd/Ctrl").replace(/Alt/g, "Option/Alt");
+  }
+
+  function canonicalHotkey(value: string) {
+    return value
+      .split("+")
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .join("+")
+      .toLowerCase();
+  }
+
+  function findSystemHotkeyConflict(value: string): string | null {
+    const knownConflicts = [
+      "CommandOrControl+Space",
+      "CommandOrControl+Tab",
+      "CommandOrControl+Q",
+      "CommandOrControl+W",
+      "CommandOrControl+M",
+      "CommandOrControl+H",
+      "CommandOrControl+`",
+    ];
+    const current = canonicalHotkey(value);
+    const hit = knownConflicts.find((item) => canonicalHotkey(item) === current);
+    return hit ?? null;
   }
 
   function buildShortcutFromKeyboardEvent(event: KeyboardEvent): string | null {
@@ -420,6 +533,20 @@ function MainApp() {
     return parts.join("+");
   }
 
+  const dictationSystemConflict = useMemo(
+    () => findSystemHotkeyConflict(hotkeyDictation),
+    [hotkeyDictation]
+  );
+  const translationSystemConflict = useMemo(
+    () => findSystemHotkeyConflict(hotkeyTranslation),
+    [hotkeyTranslation]
+  );
+  const hasDuplicateHotkeys = useMemo(
+    () => canonicalHotkey(hotkeyDictation) === canonicalHotkey(hotkeyTranslation),
+    [hotkeyDictation, hotkeyTranslation]
+  );
+  const hasHotkeyConflicts = Boolean(dictationSystemConflict || translationSystemConflict || hasDuplicateHotkeys);
+
   async function setOverlayState(phase: "listening" | "thinking" | "ready", text?: string) {
     try {
       await invoke("set_overlay_state", { phase, text: text ?? null });
@@ -449,8 +576,12 @@ function MainApp() {
 
   async function loadGlobalShortcuts() {
     const settings = await invoke<HotkeySettings>("get_global_shortcuts");
-    setHotkeyToggle(settings.toggle);
+    setHotkeyDictation(settings.dictation);
+    setHotkeyTranslation(settings.translation);
     setFnKeyEnabled(settings.fnEnabled);
+    setTriggerMode(settings.triggerMode);
+    setOverlayPosition(settings.overlayPosition);
+    setOutputMode(settings.outputMode);
   }
 
   async function refreshAccessibilityStatus() {
@@ -486,6 +617,10 @@ function MainApp() {
   }, [langMode]);
 
   useEffect(() => {
+    window.localStorage.setItem(TRANSLATION_TARGET_STORAGE_KEY, translationTargetLang);
+  }, [translationTargetLang]);
+
+  useEffect(() => {
     Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus(), loadGlobalShortcuts()]).catch((err) => {
       setTranscript(t("transcriptInitFailed", { error: String(err) }));
     });
@@ -504,9 +639,7 @@ function MainApp() {
       });
 
     listen<GlobalShortcutPayload>("global-shortcut-triggered", (event) => {
-      if (event.payload.action === "toggle-dictation") {
-        void onHotkeyToggleDictation();
-      }
+      void onHotkeyEvent(event.payload);
     })
       .then((fn) => {
         unlistenHotkey = fn;
@@ -553,7 +686,11 @@ function MainApp() {
       if (!shortcut) {
         return;
       }
-      setHotkeyToggle(shortcut);
+      if (captureTarget === "dictation") {
+        setHotkeyDictation(shortcut);
+      } else if (captureTarget === "translation") {
+        setHotkeyTranslation(shortcut);
+      }
       setCaptureTarget(null);
     };
     window.addEventListener("keydown", onKeyDown, true);
@@ -579,6 +716,31 @@ function MainApp() {
     } catch (err) {
       setTranscript(t("transcriptTypeFailed", { error: String(err) }));
       return false;
+    }
+  }
+
+  function inferTranslationTarget(text: string): Exclude<TranslationTargetLang, "auto"> {
+    const hasCjk = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/.test(text);
+    return hasCjk ? "en" : "zh-CN";
+  }
+
+  async function runHotkeyPostProcess(text: string, action: HotkeyAction | null) {
+    const source = text.trim();
+    if (!source) {
+      return source;
+    }
+    if (action !== "toggle-translation") {
+      return source;
+    }
+    const targetLang = translationTargetLang === "auto" ? inferTranslationTarget(source) : translationTargetLang;
+    try {
+      setTranscript(t("transcriptTranslating"));
+      await setOverlayState("thinking", t("transcriptTranslating"));
+      const translated = await invoke<string>("translate_text_best_effort", { text: source, targetLang });
+      return (translated || source).trim();
+    } catch (err) {
+      setTranscript(t("transcriptTranslationFailed", { error: String(err) }));
+      return source;
     }
   }
 
@@ -608,16 +770,17 @@ function MainApp() {
         };
 
         const result = await invoke<SaveAndTranscribeResult>("save_recording_and_transcribe", { payload });
+        const postProcessed = await runHotkeyPostProcess(result.text || "", activeHotkeyActionRef.current);
         setRecordings((prev) => [result.recording, ...prev]);
         setSelectedId(result.recording.id);
-        setTranscript(result.text || "");
+        setTranscript(postProcessed || "");
 
         if (recordingByHotkeyRef.current) {
-          const ok = await tryTypeToFocusedApp(result.text || "");
-          if (!ok && result.text) {
-            setFallbackText(result.text);
+          const ok = await tryTypeToFocusedApp(postProcessed || "");
+          if (!ok && postProcessed) {
+            setFallbackText(postProcessed);
           }
-          await setOverlayState("ready", ok ? "" : result.text);
+          await setOverlayState("ready", ok ? "" : postProcessed);
           window.setTimeout(() => {
             void hideOverlay();
           }, 1800);
@@ -631,6 +794,10 @@ function MainApp() {
         }
       } finally {
         recordingByHotkeyRef.current = false;
+        activeHoldActionRef.current = null;
+        activeHotkeyActionRef.current = null;
+        pendingStartActionRef.current = null;
+        cancelAfterStartActionRef.current = null;
         setIsBusy(false);
       }
     };
@@ -662,25 +829,14 @@ function MainApp() {
     }
     try {
       recordingByHotkeyRef.current = false;
+      activeHotkeyActionRef.current = null;
       await startRecording();
     } catch (err) {
       setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
     }
   }
 
-  async function onHotkeyToggleDictation() {
-    const now = Date.now();
-    if (now - lastHotkeyAtRef.current < 300) {
-      return;
-    }
-    lastHotkeyAtRef.current = now;
-
-    if (isRecordingRef.current) {
-      await setOverlayState("thinking");
-      stopRecording();
-      return;
-    }
-
+  async function ensureModelReadyForHotkey() {
     if (!modelReadyRef.current) {
       try {
         const status = await invoke<ModelInitStatus>("init_model");
@@ -704,14 +860,106 @@ function MainApp() {
         return;
       }
     }
+    return true;
+  }
 
+  async function startRecordingFromHotkey(action: HotkeyAction) {
+    if (isBusy || isRecordingRef.current) {
+      return;
+    }
+    pendingStartActionRef.current = action;
+    const ready = await ensureModelReadyForHotkey();
+    if (!ready) {
+      pendingStartActionRef.current = null;
+      return;
+    }
     try {
       recordingByHotkeyRef.current = true;
+      activeHoldActionRef.current = action;
+      activeHotkeyActionRef.current = action;
       await startRecording();
       await setOverlayState("listening");
+      if (
+        triggerModeRef.current === "long-press" &&
+        cancelAfterStartActionRef.current === action
+      ) {
+        cancelAfterStartActionRef.current = null;
+        await stopRecordingFromHotkey();
+        activeHoldActionRef.current = null;
+      }
     } catch (err) {
       setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
       await setOverlayState("ready", t("transcriptRecordingFailed", { error: String(err) }));
+    } finally {
+      if (pendingStartActionRef.current === action) {
+        pendingStartActionRef.current = null;
+      }
+    }
+  }
+
+  async function stopRecordingFromHotkey() {
+    if (!isRecordingRef.current) {
+      return;
+    }
+    await setOverlayState("thinking");
+    stopRecording();
+  }
+
+  async function onHotkeyEvent(payload: GlobalShortcutPayload) {
+    const now = Date.now();
+    if (payload.action === "toggle-translation") {
+      suppressDictationUntilRef.current = now + 260;
+    }
+    if (payload.action === "toggle-dictation" && now < suppressDictationUntilRef.current) {
+      return;
+    }
+    if (payload.action === "toggle-dictation") {
+      suppressTranslationUntilRef.current = now + 130;
+    } else if (now < suppressTranslationUntilRef.current) {
+      return;
+    }
+
+    if (triggerModeRef.current === "tap") {
+      if (payload.state !== "pressed") {
+        return;
+      }
+      const lastPressed = lastPressedAtRef.current[payload.action];
+      if (now - lastPressed < 260) {
+        return;
+      }
+      lastPressedAtRef.current[payload.action] = now;
+      if (isRecordingRef.current) {
+        await stopRecordingFromHotkey();
+      } else {
+        await startRecordingFromHotkey(payload.action);
+      }
+      return;
+    }
+
+    if (payload.state === "pressed") {
+      if (isRecordingRef.current) {
+        return;
+      }
+      await startRecordingFromHotkey(payload.action);
+      return;
+    }
+
+    if (
+      payload.state === "released" &&
+      recordingByHotkeyRef.current &&
+      activeHoldActionRef.current === payload.action
+    ) {
+      await stopRecordingFromHotkey();
+      activeHoldActionRef.current = null;
+      return;
+    }
+
+    if (
+      payload.state === "released" &&
+      triggerModeRef.current === "long-press" &&
+      pendingStartActionRef.current === payload.action
+    ) {
+      cancelAfterStartActionRef.current = payload.action;
     }
   }
 
@@ -804,15 +1052,29 @@ function MainApp() {
   }
 
   async function onSaveHotkeys() {
-    const toggle = hotkeyToggle.trim();
-    if (!toggle) {
+    const dictation = hotkeyDictation.trim();
+    const translation = hotkeyTranslation.trim();
+    if (!dictation || !translation || hasHotkeyConflicts) {
+      if (hasHotkeyConflicts) {
+        setTranscript(t("settingsHotkeyWarningSaveBlocked"));
+      }
       return;
     }
     setSavingHotkeys(true);
     try {
-      const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle });
-      setHotkeyToggle(next.toggle);
+      const next = await invoke<HotkeySettings>("set_global_shortcuts", {
+        dictation,
+        translation,
+        triggerMode,
+        overlayPosition,
+        outputMode,
+      });
+      setHotkeyDictation(next.dictation);
+      setHotkeyTranslation(next.translation);
       setFnKeyEnabled(next.fnEnabled);
+      setTriggerMode(next.triggerMode);
+      setOverlayPosition(next.overlayPosition);
+      setOutputMode(next.outputMode);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -821,12 +1083,26 @@ function MainApp() {
   }
 
   async function onResetHotkeys() {
-    setHotkeyToggle(DEFAULT_HOTKEY_TOGGLE);
+    setHotkeyDictation(DEFAULT_HOTKEY_DICTATION);
+    setHotkeyTranslation(DEFAULT_HOTKEY_TRANSLATION);
+    setTriggerMode(DEFAULT_TRIGGER_MODE);
+    setOverlayPosition(DEFAULT_OVERLAY_POSITION);
+    setOutputMode(DEFAULT_OUTPUT_MODE);
     setSavingHotkeys(true);
     try {
-      const next = await invoke<HotkeySettings>("set_global_shortcuts", { toggle: DEFAULT_HOTKEY_TOGGLE });
-      setHotkeyToggle(next.toggle);
+      const next = await invoke<HotkeySettings>("set_global_shortcuts", {
+        dictation: DEFAULT_HOTKEY_DICTATION,
+        translation: DEFAULT_HOTKEY_TRANSLATION,
+        triggerMode: DEFAULT_TRIGGER_MODE,
+        overlayPosition: DEFAULT_OVERLAY_POSITION,
+        outputMode: DEFAULT_OUTPUT_MODE,
+      });
+      setHotkeyDictation(next.dictation);
+      setHotkeyTranslation(next.translation);
       setFnKeyEnabled(next.fnEnabled);
+      setTriggerMode(next.triggerMode);
+      setOverlayPosition(next.overlayPosition);
+      setOutputMode(next.outputMode);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -838,8 +1114,12 @@ function MainApp() {
     setSavingHotkeys(true);
     try {
       const next = await invoke<HotkeySettings>("set_fn_key_enabled", { enabled: nextEnabled });
-      setHotkeyToggle(next.toggle);
+      setHotkeyDictation(next.dictation);
+      setHotkeyTranslation(next.translation);
       setFnKeyEnabled(next.fnEnabled);
+      setTriggerMode(next.triggerMode);
+      setOverlayPosition(next.overlayPosition);
+      setOutputMode(next.outputMode);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -992,7 +1272,10 @@ function MainApp() {
                 </div>
 
                 <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600">
-                  <div>{t("settingsHotkeyToggle")}: <span className="font-semibold text-slate-800">{hotkeyToggle}</span></div>
+                  <div>{t("settingsHotkeyDictation")}: <span className="font-semibold text-slate-800">{hotkeyDictation}</span></div>
+                  <div className="mt-1">{t("settingsHotkeyTranslation")}: <span className="font-semibold text-slate-800">{hotkeyTranslation}</span></div>
+                  <div className="mt-1">{t("settingsTriggerMode")}: <span className="font-semibold text-slate-800">{triggerMode === "tap" ? t("settingsTriggerModeTap") : t("settingsTriggerModeLongPress")}</span></div>
+                  <div className="mt-1">{t("settingsOutputMode")}: <span className="font-semibold text-slate-800">{outputMode === "auto-paste" ? t("settingsOutputModeAutoPaste") : outputMode === "paste-and-keep" ? t("settingsOutputModePasteAndKeep") : t("settingsOutputModeCopyOnly")}</span></div>
                 </div>
               </Card>
 
@@ -1188,10 +1471,10 @@ function MainApp() {
                     <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
                     <div className="mt-3 space-y-3">
                       <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyToggle")}</label>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyDictation")}</label>
                         <div className="flex gap-2">
                           <input
-                            value={normalizeHotkeyLabel(hotkeyToggle)}
+                            value={normalizeHotkeyLabel(hotkeyDictation)}
                             readOnly
                             placeholder={t("settingsHotkeyTogglePlaceholder")}
                             className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
@@ -1200,13 +1483,93 @@ function MainApp() {
                             variant="outline"
                             type="button"
                             className="h-10 min-w-[96px] justify-center whitespace-nowrap"
-                            onClick={() => setCaptureTarget("toggle")}
+                            onClick={() => setCaptureTarget("dictation")}
                             disabled={savingHotkeys}
                           >
-                            {captureTarget === "toggle" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
+                            {captureTarget === "dictation" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
                           </Button>
                         </div>
                       </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyTranslation")}</label>
+                        <div className="flex gap-2">
+                          <input
+                            value={normalizeHotkeyLabel(hotkeyTranslation)}
+                            readOnly
+                            placeholder={t("settingsHotkeyTogglePlaceholder")}
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
+                          />
+                          <Button
+                            variant="outline"
+                            type="button"
+                            className="h-10 min-w-[96px] justify-center whitespace-nowrap"
+                            onClick={() => setCaptureTarget("translation")}
+                            disabled={savingHotkeys}
+                          >
+                            {captureTarget === "translation" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
+                          </Button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsTriggerMode")}</label>
+                        <select
+                          value={triggerMode}
+                          onChange={(event) => setTriggerMode(event.target.value as HotkeyTriggerMode)}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        >
+                          <option value="tap">{t("settingsTriggerModeTap")}</option>
+                          <option value="long-press">{t("settingsTriggerModeLongPress")}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsOverlayPosition")}</label>
+                        <select
+                          value={overlayPosition}
+                          onChange={(event) => setOverlayPosition(event.target.value as OverlayPosition)}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        >
+                          <option value="bottom">{t("settingsOverlayPositionBottom")}</option>
+                          <option value="top">{t("settingsOverlayPositionTop")}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsOutputMode")}</label>
+                        <select
+                          value={outputMode}
+                          onChange={(event) => setOutputMode(event.target.value as OutputMode)}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        >
+                          <option value="auto-paste">{t("settingsOutputModeAutoPaste")}</option>
+                          <option value="paste-and-keep">{t("settingsOutputModePasteAndKeep")}</option>
+                          <option value="copy-only">{t("settingsOutputModeCopyOnly")}</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsTranslationTarget")}</label>
+                        <select
+                          value={translationTargetLang}
+                          onChange={(event) => setTranslationTargetLang(event.target.value as TranslationTargetLang)}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        >
+                          <option value="auto">{t("settingsTranslationTargetAuto")}</option>
+                          <option value="en">{t("settingsTranslationTargetEn")}</option>
+                          <option value="zh-CN">{t("settingsTranslationTargetZh")}</option>
+                          <option value="ja">{t("settingsTranslationTargetJa")}</option>
+                          <option value="ko">{t("settingsTranslationTargetKo")}</option>
+                        </select>
+                      </div>
+                      {hasHotkeyConflicts && (
+                        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                          <div className="font-semibold">{t("settingsHotkeyConflictTitle")}</div>
+                          {hasDuplicateHotkeys && <div>{t("settingsHotkeyConflictSame")}</div>}
+                          {dictationSystemConflict && (
+                            <div>{t("settingsHotkeyConflictWithSystem", { value: normalizeHotkeyLabel(dictationSystemConflict) })}</div>
+                          )}
+                          {translationSystemConflict && (
+                            <div>{t("settingsHotkeyConflictWithSystem", { value: normalizeHotkeyLabel(translationSystemConflict) })}</div>
+                          )}
+                        </div>
+                      )}
                       <label className="flex items-center gap-2 text-sm text-slate-700">
                         <input
                           type="checkbox"
@@ -1219,7 +1582,7 @@ function MainApp() {
                       </label>
                       <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
                       <div className="flex gap-2">
-                        <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys}>
+                        <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys || hasHotkeyConflicts}>
                           {savingHotkeys ? <Loader2 size={14} className="animate-spin" /> : null}
                           {t("settingsHotkeySave")}
                         </Button>
