@@ -22,6 +22,7 @@ walkdir = "2.5"
 sherpa-rs = "0.6.8"
 hound = "3.5"
 tauri-plugin-global-shortcut = "2.3.1"
+cpal = "0.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"

@@ -76,6 +76,7 @@ type HotkeySettings = {
   triggerMode: HotkeyTriggerMode;
   overlayPosition: OverlayPosition;
   outputMode: OutputMode;
+  translationTarget: TranslationTargetLang;
 };
 
 type OverlayStatePayload = {
@@ -86,12 +87,12 @@ type OverlayStatePayload = {
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
-const TRANSLATION_TARGET_STORAGE_KEY = "typemore.translation.target";
 const DEFAULT_HOTKEY_DICTATION = "CommandOrControl+Alt+Space";
 const DEFAULT_HOTKEY_TRANSLATION = "CommandOrControl+Alt+Enter";
 const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
 const DEFAULT_OVERLAY_POSITION: OverlayPosition = "bottom";
 const DEFAULT_OUTPUT_MODE: OutputMode = "auto-paste";
+const BACKEND_NATIVE_HOTKEY_PIPELINE = true;
 
 const I18N = {
   zh: {
@@ -483,10 +484,7 @@ function MainApp() {
   const [triggerMode, setTriggerMode] = useState<HotkeyTriggerMode>(DEFAULT_TRIGGER_MODE);
   const [overlayPosition, setOverlayPosition] = useState<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
   const [outputMode, setOutputMode] = useState<OutputMode>(DEFAULT_OUTPUT_MODE);
-  const [translationTargetLang, setTranslationTargetLang] = useState<TranslationTargetLang>(() => {
-    const raw = window.localStorage.getItem(TRANSLATION_TARGET_STORAGE_KEY);
-    return raw === "auto" || raw === "en" || raw === "zh-CN" || raw === "ja" || raw === "ko" ? raw : "auto";
-  });
+  const [translationTargetLang, setTranslationTargetLang] = useState<TranslationTargetLang>("auto");
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
@@ -727,6 +725,7 @@ function MainApp() {
     setTriggerMode(settings.triggerMode);
     setOverlayPosition(settings.overlayPosition);
     setOutputMode(settings.outputMode);
+    setTranslationTargetLang(settings.translationTarget);
   }
 
   async function refreshAccessibilityStatus() {
@@ -761,10 +760,6 @@ function MainApp() {
     window.localStorage.setItem(LANG_MODE_STORAGE_KEY, langMode);
   }, [langMode]);
 
-  useEffect(() => {
-    window.localStorage.setItem(TRANSLATION_TARGET_STORAGE_KEY, translationTargetLang);
-  }, [translationTargetLang]);
-
   useEffect(() => () => {
     stopOverlayLevelMeter();
   }, []);
@@ -788,6 +783,9 @@ function MainApp() {
       });
 
     listen<GlobalShortcutPayload>("global-shortcut-triggered", (event) => {
+      if (BACKEND_NATIVE_HOTKEY_PIPELINE) {
+        return;
+      }
       void onHotkeyEvent(event.payload);
     })
       .then((fn) => {
@@ -1221,6 +1219,7 @@ function MainApp() {
         triggerMode,
         overlayPosition,
         outputMode,
+        translationTarget: translationTargetLang,
       });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
@@ -1228,6 +1227,7 @@ function MainApp() {
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
+      setTranslationTargetLang(next.translationTarget);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -1249,6 +1249,7 @@ function MainApp() {
         triggerMode: DEFAULT_TRIGGER_MODE,
         overlayPosition: DEFAULT_OVERLAY_POSITION,
         outputMode: DEFAULT_OUTPUT_MODE,
+        translationTarget: "auto",
       });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
@@ -1256,6 +1257,7 @@ function MainApp() {
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
+      setTranslationTargetLang(next.translationTarget);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -1273,6 +1275,7 @@ function MainApp() {
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
+      setTranslationTargetLang(next.translationTarget);
     } catch (err) {
       setTranscript(String(err));
     } finally {

@@ -1,18 +1,20 @@
 #![allow(unexpected_cfgs)]
 
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use sherpa_rs::{paraformer::ParaformerConfig, paraformer::ParaformerRecognizer};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     ffi::c_void,
     fs,
-    io::{BufWriter, Cursor, Read, Write},
+    io::{BufWriter, Cursor, Read, Seek, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition, Position, Size};
+use tauri::{AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition, Position, Size, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use walkdir::WalkDir;
 
@@ -175,7 +177,9 @@ struct AppState {
     trigger_mode: Mutex<HotkeyTriggerMode>,
     overlay_position: Mutex<OverlayPosition>,
     output_mode: Mutex<OutputMode>,
+    translation_target: Mutex<TranslationTargetLang>,
     hotkey_runtime: Mutex<HotkeyRuntimeState>,
+    native_hotkey_session: Mutex<NativeHotkeySession>,
 }
 
 #[derive(Debug, Clone)]
@@ -208,9 +212,39 @@ enum OutputMode {
     CopyOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum TranslationTargetLang {
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+    #[serde(rename = "ja")]
+    Ja,
+    #[serde(rename = "ko")]
+    Ko,
+}
+
 #[derive(Debug, Clone)]
 struct HotkeyRuntimeState {
     suppress_dictation_until: Option<Instant>,
+}
+
+struct NativeRecorder {
+    stream: cpal::Stream,
+    samples: Arc<Mutex<Vec<f32>>>,
+    sample_rate: u32,
+    channels: u16,
+}
+
+#[derive(Default)]
+struct NativeHotkeySession {
+    active_action: Option<String>,
+}
+
+thread_local! {
+    static NATIVE_RECORDER: RefCell<Option<NativeRecorder>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug, Serialize)]
@@ -222,6 +256,7 @@ struct HotkeySettings {
     trigger_mode: HotkeyTriggerMode,
     overlay_position: OverlayPosition,
     output_mode: OutputMode,
+    translation_target: TranslationTargetLang,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -239,6 +274,8 @@ struct PersistedHotkeySettings {
     overlay_position: OverlayPosition,
     #[serde(default = "default_output_mode")]
     output_mode: OutputMode,
+    #[serde(default = "default_translation_target")]
+    translation_target: TranslationTargetLang,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -290,9 +327,11 @@ impl Default for AppState {
             trigger_mode: Mutex::new(default_trigger_mode()),
             overlay_position: Mutex::new(default_overlay_position()),
             output_mode: Mutex::new(default_output_mode()),
+            translation_target: Mutex::new(default_translation_target()),
             hotkey_runtime: Mutex::new(HotkeyRuntimeState {
                 suppress_dictation_until: None,
             }),
+            native_hotkey_session: Mutex::new(NativeHotkeySession::default()),
         }
     }
 }
@@ -328,6 +367,10 @@ const fn default_overlay_position() -> OverlayPosition {
 
 const fn default_output_mode() -> OutputMode {
     OutputMode::AutoPaste
+}
+
+const fn default_translation_target() -> TranslationTargetLang {
+    TranslationTargetLang::Auto
 }
 
 fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfig, String> {
@@ -427,6 +470,11 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
         .lock()
         .map_err(|_| "failed to read output mode settings".to_string())
         .map(|v| *v)?;
+    let translation_target = state
+        .translation_target
+        .lock()
+        .map_err(|_| "failed to read translation target settings".to_string())
+        .map(|v| *v)?;
 
     Ok(HotkeySettings {
         dictation,
@@ -435,6 +483,7 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
         trigger_mode,
         overlay_position,
         output_mode,
+        translation_target,
     })
 }
 
@@ -449,6 +498,7 @@ fn save_current_hotkey_settings(app: &AppHandle) -> Result<(), String> {
             trigger_mode: current.trigger_mode,
             overlay_position: current.overlay_position,
             output_mode: current.output_mode,
+            translation_target: current.translation_target,
         },
     )
 }
@@ -921,6 +971,210 @@ fn transcribe_samples(
     Ok(result.text)
 }
 
+fn start_native_recording(_app: &AppHandle) -> Result<(), String> {
+    let already_active = NATIVE_RECORDER.with(|cell| cell.borrow().is_some());
+    if already_active {
+        return Ok(());
+    }
+
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| "no default input device".to_string())?;
+    let config = device
+        .default_input_config()
+        .map_err(|e| format!("failed to get default input config: {e}"))?;
+
+    let sample_rate = config.sample_rate().0;
+    let channels = config.channels();
+    let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
+    let samples_ref = Arc::clone(&samples);
+    let err_fn = |err| eprintln!("[typemore] native recording stream error: {err}");
+
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => device
+            .build_input_stream(
+                &config.config(),
+                move |data: &[f32], _| {
+                    if let Ok(mut buf) = samples_ref.lock() {
+                        buf.extend_from_slice(data);
+                    }
+                },
+                err_fn,
+                None,
+            )
+            .map_err(|e| format!("failed to build f32 input stream: {e}"))?,
+        cpal::SampleFormat::I16 => {
+            let samples_ref = Arc::clone(&samples);
+            device
+                .build_input_stream(
+                    &config.config(),
+                    move |data: &[i16], _| {
+                        if let Ok(mut buf) = samples_ref.lock() {
+                            buf.extend(data.iter().map(|v| *v as f32 / i16::MAX as f32));
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| format!("failed to build i16 input stream: {e}"))?
+        }
+        cpal::SampleFormat::U16 => {
+            let samples_ref = Arc::clone(&samples);
+            device
+                .build_input_stream(
+                    &config.config(),
+                    move |data: &[u16], _| {
+                        if let Ok(mut buf) = samples_ref.lock() {
+                            buf.extend(
+                                data.iter()
+                                    .map(|v| (*v as f32 / u16::MAX as f32) * 2.0 - 1.0),
+                            );
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| format!("failed to build u16 input stream: {e}"))?
+        }
+        format => return Err(format!("unsupported sample format: {format:?}")),
+    };
+
+    stream
+        .play()
+        .map_err(|e| format!("failed to start input stream: {e}"))?;
+    NATIVE_RECORDER.with(|cell| {
+        *cell.borrow_mut() = Some(NativeRecorder {
+            stream,
+            samples,
+            sample_rate,
+            channels,
+        });
+    });
+    Ok(())
+}
+
+fn stop_native_recording(_app: &AppHandle) -> Result<(Vec<f32>, u32, u16), String> {
+    let recorder = NATIVE_RECORDER
+        .with(|cell| cell.borrow_mut().take())
+        .ok_or_else(|| "native recorder not active".to_string())?;
+    drop(recorder.stream);
+    let samples = recorder
+        .samples
+        .lock()
+        .map_err(|_| "failed to read native recorder samples".to_string())?
+        .clone();
+    Ok((samples, recorder.sample_rate, recorder.channels))
+}
+
+fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return samples.to_vec();
+    }
+    let channels_usize = channels as usize;
+    samples
+        .chunks(channels_usize)
+        .map(|chunk| chunk.iter().copied().sum::<f32>() / chunk.len() as f32)
+        .collect()
+}
+
+fn encode_wav_i16_mono(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, String> {
+    let mut cursor = Cursor::new(Vec::<u8>::new());
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    {
+        let mut writer =
+            hound::WavWriter::new(&mut cursor, spec).map_err(|e| format!("wav init failed: {e}"))?;
+        for sample in samples {
+            let clamped = sample.clamp(-1.0, 1.0);
+            let v = (clamped * i16::MAX as f32).round() as i16;
+            writer
+                .write_sample(v)
+                .map_err(|e| format!("wav sample write failed: {e}"))?;
+        }
+        writer
+            .finalize()
+            .map_err(|e| format!("wav finalize failed: {e}"))?;
+    }
+    cursor
+        .rewind()
+        .map_err(|e| format!("wav rewind failed: {e}"))?;
+    Ok(cursor.into_inner())
+}
+
+fn persist_recording_with_text(
+    app: &AppHandle,
+    wav_data: &[u8],
+    text: &str,
+    suggested_prefix: &str,
+) -> Result<(), String> {
+    let dir = recordings_dir(app)?;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let base_name = sanitize_filename(suggested_prefix);
+    let file_name = format!("{now_ms}_{base_name}.wav");
+    let path = dir.join(file_name);
+    fs::write(&path, wav_data).map_err(|e| format!("failed to save wav file: {e}"))?;
+    let recording =
+        to_recording_item(&path).ok_or_else(|| "failed to build recording metadata".to_string())?;
+    put_cached_transcript(app, &recording.id, text)?;
+    Ok(())
+}
+
+fn infer_translation_target(text: &str) -> &'static str {
+    let has_cjk = text.chars().any(|ch| {
+        ('\u{3040}'..='\u{30ff}').contains(&ch)
+            || ('\u{3400}'..='\u{9fff}').contains(&ch)
+            || ('\u{f900}'..='\u{faff}').contains(&ch)
+    });
+    if has_cjk { "en" } else { "zh-CN" }
+}
+
+fn resolve_translation_target(app: &AppHandle, text: &str) -> &'static str {
+    let mode = app
+        .state::<AppState>()
+        .translation_target
+        .lock()
+        .map(|v| *v)
+        .unwrap_or(default_translation_target());
+    match mode {
+        TranslationTargetLang::Auto => infer_translation_target(text),
+        TranslationTargetLang::En => "en",
+        TranslationTargetLang::ZhCn => "zh-CN",
+        TranslationTargetLang::Ja => "ja",
+        TranslationTargetLang::Ko => "ko",
+    }
+}
+
+fn type_text_to_focused_app_impl(app: &AppHandle, text: &str) -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("type_text_to_focused_app is currently only supported on macOS".into());
+    }
+    let output_mode = app
+        .state::<AppState>()
+        .output_mode
+        .lock()
+        .map_err(|_| "failed to read output mode settings".to_string())
+        .map(|v| *v)?;
+
+    let requires_accessibility = output_mode != OutputMode::CopyOnly;
+    if requires_accessibility && !macos_is_accessibility_trusted() {
+        return Err("accessibility permission not granted".into());
+    }
+
+    match output_mode {
+        OutputMode::AutoPaste => type_text_via_paste(text, false, true),
+        OutputMode::PasteAndKeep => type_text_via_paste(text, true, true),
+        OutputMode::CopyOnly => type_text_via_paste(text, true, false),
+    }
+}
+
 #[tauri::command]
 fn check_model_status(app: AppHandle) -> Result<ModelStatus, String> {
     Ok(match model_files_if_ready(&app) {
@@ -1344,26 +1598,7 @@ fn type_text_via_paste(text: &str, keep_result_in_clipboard: bool, do_paste: boo
 
 #[tauri::command]
 fn type_text_to_focused_app(app: AppHandle, text: String) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("type_text_to_focused_app is currently only supported on macOS".into());
-    }
-    let output_mode = app
-        .state::<AppState>()
-        .output_mode
-        .lock()
-        .map_err(|_| "failed to read output mode settings".to_string())
-        .map(|v| *v)?;
-
-    let requires_accessibility = output_mode != OutputMode::CopyOnly;
-    if requires_accessibility && !macos_is_accessibility_trusted() {
-        return Err("accessibility permission not granted".into());
-    }
-
-    match output_mode {
-        OutputMode::AutoPaste => type_text_via_paste(&text, false, true),
-        OutputMode::PasteAndKeep => type_text_via_paste(&text, true, true),
-        OutputMode::CopyOnly => type_text_via_paste(&text, true, false),
-    }
+    type_text_to_focused_app_impl(&app, &text)
 }
 
 fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
@@ -1507,6 +1742,7 @@ fn set_global_shortcuts(
     trigger_mode: HotkeyTriggerMode,
     overlay_position: OverlayPosition,
     output_mode: OutputMode,
+    translation_target: TranslationTargetLang,
 ) -> Result<HotkeySettings, String> {
     let new_config = build_hotkey_config(&dictation, &translation)?;
     let _applied = apply_hotkey_shortcuts(&app, new_config)?;
@@ -1529,6 +1765,12 @@ fn set_global_shortcuts(
             .lock()
             .map_err(|_| "failed to update output mode settings".to_string())?;
         *output_lock = output_mode;
+        drop(output_lock);
+        let mut translation_target_lock = state
+            .translation_target
+            .lock()
+            .map_err(|_| "failed to update translation target settings".to_string())?;
+        *translation_target_lock = translation_target;
     }
 
     save_current_hotkey_settings(&app)?;
@@ -1570,6 +1812,151 @@ fn hide_overlay(app: AppHandle) -> Result<(), String> {
     emit_overlay_state(&app, "hidden", None, None)
 }
 
+fn handle_native_hotkey_start(app: &AppHandle, action: &str) {
+    if let Err(err) = start_native_recording(app) {
+        let _ = emit_overlay_state(app, "ready", Some(format!("录音启动失败: {err}")), None);
+        return;
+    }
+    {
+        let state = app.state::<AppState>();
+        let maybe_session = state.native_hotkey_session.lock();
+        if let Ok(mut session) = maybe_session {
+            session.active_action = Some(action.to_string());
+        }
+    }
+    let _ = emit_overlay_state(app, "listening", None, Some(0.0));
+}
+
+fn handle_native_hotkey_stop(app: &AppHandle, action: &str) {
+    let active_action = {
+        let state = app.state::<AppState>();
+        state
+            .native_hotkey_session
+            .lock()
+            .ok()
+            .and_then(|s| s.active_action.clone())
+    };
+    if active_action.as_deref() != Some(action) {
+        return;
+    }
+
+    let _ = emit_overlay_state(app, "thinking", None, None);
+    let (samples_raw, sample_rate, channels) = match stop_native_recording(app) {
+        Ok(v) => v,
+        Err(err) => {
+            let _ = emit_overlay_state(app, "ready", Some(format!("录音停止失败: {err}")), None);
+            return;
+        }
+    };
+    {
+        let state = app.state::<AppState>();
+        let maybe_session = state.native_hotkey_session.lock();
+        if let Ok(mut session) = maybe_session {
+            session.active_action = None;
+        }
+    }
+
+    if samples_raw.is_empty() {
+        let _ = emit_overlay_state(app, "ready", Some("未检测到语音".into()), None);
+        return;
+    }
+
+    let mono = mix_to_mono(&samples_raw, channels);
+    let (model, tokens) = match model_files_if_ready(app) {
+        Ok(v) => v,
+        Err(err) => {
+            let _ = emit_overlay_state(app, "ready", Some(format!("模型未就绪: {err}")), None);
+            return;
+        }
+    };
+
+    let mut text = match transcribe_samples(&model, &tokens, sample_rate, &mono) {
+        Ok(v) => v,
+        Err(err) => {
+            let _ = emit_overlay_state(app, "ready", Some(format!("识别失败: {err}")), None);
+            return;
+        }
+    };
+    if action == "toggle-translation" {
+        let target = resolve_translation_target(app, &text).to_string();
+        if let Ok(translated) = translate_text_best_effort(text.clone(), Some(target)) {
+            text = translated;
+        }
+    }
+
+    if let Ok(wav_data) = encode_wav_i16_mono(&mono, sample_rate) {
+        let prefix = if action == "toggle-translation" {
+            "translation"
+        } else {
+            "recording"
+        };
+        let _ = persist_recording_with_text(app, &wav_data, &text, prefix);
+    }
+
+    let output = text.trim().to_string();
+    if output.is_empty() {
+        let _ = emit_overlay_state(app, "ready", Some("未识别到有效文本".into()), None);
+    } else if let Err(err) = type_text_to_focused_app_impl(app, &output) {
+        let _ = emit_overlay_state(
+            app,
+            "ready",
+            Some(format!("发送失败（已保留文本）: {err}")),
+            None,
+        );
+    } else {
+        let _ = emit_overlay_state(app, "ready", Some(output), None);
+    }
+
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1600));
+        let _ = emit_overlay_state(&app_clone, "hidden", None, None);
+    });
+}
+
+fn handle_native_hotkey_event(app: &AppHandle, action: &str, state: &str) {
+    let trigger_mode = app
+        .state::<AppState>()
+        .trigger_mode
+        .lock()
+        .map(|v| *v)
+        .unwrap_or(HotkeyTriggerMode::Tap);
+
+    match trigger_mode {
+        HotkeyTriggerMode::Tap => {
+            if state != "pressed" {
+                return;
+            }
+            let is_active = app
+                .state::<AppState>()
+                .native_hotkey_session
+                .lock()
+                .ok()
+                .and_then(|s| s.active_action.clone())
+                .is_some();
+            if is_active {
+                let active = app
+                    .state::<AppState>()
+                    .native_hotkey_session
+                    .lock()
+                    .ok()
+                    .and_then(|s| s.active_action.clone())
+                    .unwrap_or_else(|| action.to_string());
+                handle_native_hotkey_stop(app, &active);
+            } else {
+                handle_native_hotkey_start(app, action);
+            }
+        }
+        HotkeyTriggerMode::LongPress => {
+            if state == "pressed" {
+                handle_native_hotkey_start(app, action);
+            } else if state == "released" {
+                handle_native_hotkey_stop(app, action);
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1593,6 +1980,7 @@ pub fn run() {
                         return;
                     };
                     emit_hotkey_event(app, action, &shortcut.to_string(), state);
+                    handle_native_hotkey_event(app, action, state);
                 })
                 .build(),
         )
@@ -1615,6 +2003,10 @@ pub fn run() {
                 .as_ref()
                 .map(|saved| saved.output_mode)
                 .unwrap_or_else(default_output_mode);
+            let translation_target = persisted
+                .as_ref()
+                .map(|saved| saved.translation_target)
+                .unwrap_or_else(default_translation_target);
 
             let desired_cfg = match persisted {
                 Some(saved) => match build_hotkey_config(&saved.dictation, &saved.translation) {
@@ -1658,6 +2050,9 @@ pub fn run() {
             if let Ok(mut lock) = app.state::<AppState>().output_mode.lock() {
                 *lock = output_mode;
             }
+            if let Ok(mut lock) = app.state::<AppState>().translation_target.lock() {
+                *lock = translation_target;
+            }
             let _ = save_current_hotkey_settings(app.handle());
             eprintln!("[typemore] fn key enabled: {}", fn_enabled);
 
@@ -1676,6 +2071,16 @@ pub fn run() {
                 });
                 let _ = overlay.once("tauri://error", |_| {
                     eprintln!("[typemore] overlay webview error");
+                });
+            }
+
+            if let Some(main) = app.get_webview_window("main") {
+                let main_window = main.clone();
+                let _ = main.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = main_window.hide();
+                    }
                 });
             }
             Ok(())
