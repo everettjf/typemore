@@ -171,7 +171,7 @@ impl Default for ModelInitStatus {
             running: false,
             phase: "idle".into(),
             progress: 0.0,
-            message: "模型尚未初始化".into(),
+            message: "Model not initialized".into(),
             ready: false,
             error: None,
         }
@@ -186,6 +186,7 @@ struct AppState {
     overlay_position: Mutex<OverlayPosition>,
     output_mode: Mutex<OutputMode>,
     translation_target: Mutex<TranslationTargetLang>,
+    ui_language: Mutex<UiLanguage>,
     hotkey_runtime: Mutex<HotkeyRuntimeState>,
     native_hotkey_session: Mutex<NativeHotkeySession>,
     native_recorder_tx: Mutex<Option<mpsc::Sender<NativeRecorderCommand>>>,
@@ -233,6 +234,13 @@ enum TranslationTargetLang {
     Ja,
     #[serde(rename = "ko")]
     Ko,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum UiLanguage {
+    Zh,
+    En,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +310,7 @@ struct HotkeySettings {
     overlay_position: OverlayPosition,
     output_mode: OutputMode,
     translation_target: TranslationTargetLang,
+    ui_language: UiLanguage,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -321,6 +330,8 @@ struct PersistedHotkeySettings {
     output_mode: OutputMode,
     #[serde(default = "default_translation_target")]
     translation_target: TranslationTargetLang,
+    #[serde(default = "default_ui_language")]
+    ui_language: UiLanguage,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -364,6 +375,22 @@ fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str)
     );
 }
 
+fn current_ui_language(app: &AppHandle) -> UiLanguage {
+    app.state::<AppState>()
+        .ui_language
+        .lock()
+        .map(|v| *v)
+        .unwrap_or(default_ui_language())
+}
+
+fn localize_text(app: &AppHandle, zh: &str, en: &str) -> String {
+    if current_ui_language(app) == UiLanguage::En {
+        en.to_string()
+    } else {
+        zh.to_string()
+    }
+}
+
 fn set_native_recorder_state(
     app: &AppHandle,
     state: NativeRecorderState,
@@ -403,6 +430,7 @@ impl Default for AppState {
             overlay_position: Mutex::new(default_overlay_position()),
             output_mode: Mutex::new(default_output_mode()),
             translation_target: Mutex::new(default_translation_target()),
+            ui_language: Mutex::new(default_ui_language()),
             hotkey_runtime: Mutex::new(HotkeyRuntimeState {
                 suppress_dictation_until: None,
             }),
@@ -447,6 +475,10 @@ const fn default_output_mode() -> OutputMode {
 
 const fn default_translation_target() -> TranslationTargetLang {
     TranslationTargetLang::Auto
+}
+
+const fn default_ui_language() -> UiLanguage {
+    UiLanguage::Zh
 }
 
 fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfig, String> {
@@ -551,6 +583,11 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
         .lock()
         .map_err(|_| "failed to read translation target settings".to_string())
         .map(|v| *v)?;
+    let ui_language = state
+        .ui_language
+        .lock()
+        .map_err(|_| "failed to read ui language settings".to_string())
+        .map(|v| *v)?;
 
     Ok(HotkeySettings {
         dictation,
@@ -560,6 +597,7 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
         overlay_position,
         output_mode,
         translation_target,
+        ui_language,
     })
 }
 
@@ -575,6 +613,7 @@ fn save_current_hotkey_settings(app: &AppHandle) -> Result<(), String> {
             overlay_position: current.overlay_position,
             output_mode: current.output_mode,
             translation_target: current.translation_target,
+            ui_language: current.ui_language,
         },
     )
 }
@@ -827,6 +866,7 @@ fn extract_model_archive(archive_path: &Path, output_dir: &Path) -> Result<(), S
 }
 
 fn download_file_with_progress(
+    app: &AppHandle,
     url: &str,
     output: &Path,
     on_progress: &mut dyn FnMut(f32, String),
@@ -869,19 +909,32 @@ fn download_file_with_progress(
             if should_emit {
                 on_progress(
                     80.0 * p,
-                    format!(
-                        "下载模型中... {:.1}% ({:.1} MB / {:.1} MB)",
-                        p * 100.0,
-                        downloaded as f32 / 1_048_576.0,
-                        all as f32 / 1_048_576.0
-                    ),
+                    if current_ui_language(app) == UiLanguage::En {
+                        format!(
+                            "Downloading model... {:.1}% ({:.1} MB / {:.1} MB)",
+                            p * 100.0,
+                            downloaded as f32 / 1_048_576.0,
+                            all as f32 / 1_048_576.0
+                        )
+                    } else {
+                        format!(
+                            "下载模型中... {:.1}% ({:.1} MB / {:.1} MB)",
+                            p * 100.0,
+                            downloaded as f32 / 1_048_576.0,
+                            all as f32 / 1_048_576.0
+                        )
+                    },
                 );
                 last_emit = Instant::now();
                 last_ratio = p;
             }
             continue;
         } else {
-            format!("下载模型中... {:.1} MB", downloaded as f32 / 1_048_576.0)
+            if current_ui_language(app) == UiLanguage::En {
+                format!("Downloading model... {:.1} MB", downloaded as f32 / 1_048_576.0)
+            } else {
+                format!("下载模型中... {:.1} MB", downloaded as f32 / 1_048_576.0)
+            }
         };
         on_progress(40.0, message);
     }
@@ -900,7 +953,7 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
                 running: false,
                 phase: "done".into(),
                 progress: 100.0,
-                message: "模型已就绪".into(),
+                message: localize_text(app, "模型已就绪", "Model is ready"),
                 ready: true,
                 error: None,
             },
@@ -919,7 +972,7 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
                 running: true,
                 phase: "download".into(),
                 progress: 1.0,
-                message: "开始下载模型".into(),
+                message: localize_text(app, "开始下载模型", "Starting model download"),
                 ready: false,
                 error: None,
             },
@@ -938,7 +991,7 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
                 },
             );
         };
-        download_file_with_progress(MODEL_ARCHIVE_URL, &archive_path, &mut progress_callback)?;
+        download_file_with_progress(app, MODEL_ARCHIVE_URL, &archive_path, &mut progress_callback)?;
     } else {
         set_init_status(
             app,
@@ -946,7 +999,11 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
                 running: true,
                 phase: "download".into(),
                 progress: 80.0,
-                message: "检测到已下载模型包，跳过下载".into(),
+                message: localize_text(
+                    app,
+                    "检测到已下载模型包，跳过下载",
+                    "Detected existing model archive, skipping download",
+                ),
                 ready: false,
                 error: None,
             },
@@ -959,7 +1016,7 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
             running: true,
             phase: "extract".into(),
             progress: 85.0,
-            message: "正在解压模型".into(),
+            message: localize_text(app, "正在解压模型", "Extracting model files"),
             ready: false,
             error: None,
         },
@@ -973,7 +1030,7 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
             running: true,
             phase: "scan".into(),
             progress: 96.0,
-            message: "正在校验模型文件".into(),
+            message: localize_text(app, "正在校验模型文件", "Validating model files"),
             ready: false,
             error: None,
         },
@@ -987,7 +1044,7 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
             running: false,
             phase: "done".into(),
             progress: 100.0,
-            message: "模型初始化完成".into(),
+            message: localize_text(app, "模型初始化完成", "Model initialization complete"),
             ready: true,
             error: None,
         },
@@ -1274,7 +1331,7 @@ fn get_model_init_status(app: AppHandle) -> Result<ModelInitStatus, String> {
         if status.ready && status.phase == "idle" {
             status.phase = "done".into();
             status.progress = 100.0;
-            status.message = "模型已就绪".into();
+            status.message = localize_text(&app, "模型已就绪", "Model is ready");
         }
     }
     Ok(status)
@@ -1287,7 +1344,7 @@ fn init_model(app: AppHandle) -> Result<ModelInitStatus, String> {
             running: false,
             phase: "done".into(),
             progress: 100.0,
-            message: "模型已就绪".into(),
+            message: localize_text(&app, "模型已就绪", "Model is ready"),
             ready: true,
             error: None,
         };
@@ -1304,7 +1361,7 @@ fn init_model(app: AppHandle) -> Result<ModelInitStatus, String> {
         running: true,
         phase: "queued".into(),
         progress: 0.0,
-        message: "初始化任务已启动".into(),
+        message: localize_text(&app, "初始化任务已启动", "Initialization task started"),
         ready: false,
         error: None,
     };
@@ -1319,7 +1376,7 @@ fn init_model(app: AppHandle) -> Result<ModelInitStatus, String> {
                     running: false,
                     phase: "error".into(),
                     progress: 0.0,
-                    message: "模型初始化失败".into(),
+                    message: localize_text(&app_handle, "模型初始化失败", "Model initialization failed"),
                     ready: false,
                     error: Some(err),
                 },
@@ -1881,6 +1938,28 @@ fn set_fn_key_enabled(app: AppHandle, enabled: bool) -> Result<HotkeySettings, S
 }
 
 #[tauri::command]
+fn set_ui_language(app: AppHandle, language: String) -> Result<HotkeySettings, String> {
+    let parsed = match language.as_str() {
+        "zh" | "zh-CN" | "zh-cn" => UiLanguage::Zh,
+        "en" | "en-US" | "en-us" => UiLanguage::En,
+        "auto" => UiLanguage::Zh,
+        _ => {
+            return Err(format!("unsupported ui language: {language}"));
+        }
+    };
+    {
+        let state = app.state::<AppState>();
+        let mut lock = state
+            .ui_language
+            .lock()
+            .map_err(|_| "failed to update ui language settings".to_string())?;
+        *lock = parsed;
+    }
+    save_current_hotkey_settings(&app)?;
+    collect_hotkey_settings(&app)
+}
+
+#[tauri::command]
 fn set_overlay_state(app: AppHandle, phase: String, text: Option<String>) -> Result<(), String> {
     emit_overlay_state(&app, &phase, text, None)
 }
@@ -1931,7 +2010,11 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         let _ = emit_overlay_state(
                             &app_handle,
                             "ready",
-                            Some(format!("录音启动失败: {err}")),
+                            Some(if current_ui_language(&app_handle) == UiLanguage::En {
+                                format!("Failed to start recording: {err}")
+                            } else {
+                                format!("录音启动失败: {err}")
+                            }),
                             None,
                         );
                         reset_native_session_to_idle(&app_handle);
@@ -1966,7 +2049,11 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                                 let _ = emit_overlay_state(
                                     &app_handle,
                                     "ready",
-                                    Some(format!("录音停止失败: {err}")),
+                                    Some(if current_ui_language(&app_handle) == UiLanguage::En {
+                                        format!("Failed to stop recording: {err}")
+                                    } else {
+                                        format!("录音停止失败: {err}")
+                                    }),
                                     None,
                                 );
                                 reset_native_session_to_idle(&app_handle);
@@ -1982,7 +2069,12 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
 
                     if samples_raw.is_empty() {
                         eprintln!("[typemore][recorder] empty-audio action={}", action);
-                        let _ = emit_overlay_state(&app_handle, "ready", Some("未检测到语音".into()), None);
+                        let _ = emit_overlay_state(
+                            &app_handle,
+                            "ready",
+                            Some(localize_text(&app_handle, "未检测到语音", "No speech detected")),
+                            None,
+                        );
                         reset_native_session_to_idle(&app_handle);
                         continue;
                     }
@@ -1994,7 +2086,11 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                             let _ = emit_overlay_state(
                                 &app_handle,
                                 "ready",
-                                Some(format!("模型未就绪: {err}")),
+                                Some(if current_ui_language(&app_handle) == UiLanguage::En {
+                                    format!("Model not ready: {err}")
+                                } else {
+                                    format!("模型未就绪: {err}")
+                                }),
                                 None,
                             );
                             reset_native_session_to_idle(&app_handle);
@@ -2013,7 +2109,11 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                             let _ = emit_overlay_state(
                                 &app_handle,
                                 "ready",
-                                Some(format!("识别失败: {err}")),
+                                Some(if current_ui_language(&app_handle) == UiLanguage::En {
+                                    format!("Transcription failed: {err}")
+                                } else {
+                                    format!("识别失败: {err}")
+                                }),
                                 None,
                             );
                             reset_native_session_to_idle(&app_handle);
@@ -2055,14 +2155,22 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         let _ = emit_overlay_state(
                             &app_handle,
                             "ready",
-                            Some("未识别到有效文本".into()),
+                            Some(localize_text(
+                                &app_handle,
+                                "未识别到有效文本",
+                                "No valid text recognized",
+                            )),
                             None,
                         );
                     } else if let Err(err) = type_text_to_focused_app_impl(&app_handle, &output) {
                         let _ = emit_overlay_state(
                             &app_handle,
                             "ready",
-                            Some(format!("发送失败（已保留文本）: {err}")),
+                            Some(if current_ui_language(&app_handle) == UiLanguage::En {
+                                format!("Failed to type text (text kept): {err}")
+                            } else {
+                                format!("发送失败（已保留文本）: {err}")
+                            }),
                             None,
                         );
                     } else {
@@ -2085,7 +2193,11 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                     let _ = emit_overlay_state(
                         &app_handle,
                         "ready",
-                        Some("录音已自动重置，请重试".into()),
+                        Some(localize_text(
+                            &app_handle,
+                            "录音已自动重置，请重试",
+                            "Recording was auto-reset. Please try again.",
+                        )),
                         None,
                     );
                     let app_clone = app_handle.clone();
@@ -2345,6 +2457,10 @@ pub fn run() {
                 .as_ref()
                 .map(|saved| saved.translation_target)
                 .unwrap_or_else(default_translation_target);
+            let ui_language = persisted
+                .as_ref()
+                .map(|saved| saved.ui_language)
+                .unwrap_or_else(default_ui_language);
 
             let desired_cfg = match persisted {
                 Some(saved) => match build_hotkey_config(&saved.dictation, &saved.translation) {
@@ -2391,8 +2507,12 @@ pub fn run() {
             if let Ok(mut lock) = app.state::<AppState>().translation_target.lock() {
                 *lock = translation_target;
             }
+            if let Ok(mut lock) = app.state::<AppState>().ui_language.lock() {
+                *lock = ui_language;
+            }
             let _ = save_current_hotkey_settings(app.handle());
             eprintln!("[typemore] fn key enabled: {}", fn_enabled);
+            eprintln!("[typemore] ui language: {:?}", ui_language);
 
             #[cfg(target_os = "macos")]
             if let Err(err) = start_macos_fn_key_monitor(app.handle()) {
@@ -2450,6 +2570,7 @@ pub fn run() {
             get_global_shortcuts,
             set_global_shortcuts,
             set_fn_key_enabled,
+            set_ui_language,
             set_overlay_state,
             set_overlay_level,
             hide_overlay

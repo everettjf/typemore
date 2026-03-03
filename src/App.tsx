@@ -77,6 +77,7 @@ type HotkeySettings = {
   overlayPosition: OverlayPosition;
   outputMode: OutputMode;
   translationTarget: TranslationTargetLang;
+  uiLanguage?: "zh" | "en";
 };
 
 type OverlayStatePayload = {
@@ -333,6 +334,17 @@ function detectSystemLang(): UiLang {
   return lang.startsWith("zh") ? "zh" : "en";
 }
 
+function resolveUiLangFromLocalSetting(): UiLang {
+  const raw = window.localStorage.getItem(LANG_MODE_STORAGE_KEY);
+  if (raw === "zh-CN") {
+    return "zh";
+  }
+  if (raw === "en-US") {
+    return "en";
+  }
+  return detectSystemLang();
+}
+
 function localizedInitMessage(status: ModelInitStatus, uiLang: UiLang) {
   if (uiLang === "zh") {
     return status.message;
@@ -388,10 +400,13 @@ function OverlayWindowApp() {
   const [phase, setPhase] = useState<OverlayStatePayload["phase"]>("hidden");
   const [text, setText] = useState("");
   const [level, setLevel] = useState(0);
+  const [uiLang, setUiLang] = useState<UiLang>(() => resolveUiLangFromLocalSetting());
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<OverlayStatePayload>("overlay-state", (event) => {
+      const nextUiLang = resolveUiLangFromLocalSetting();
+      setUiLang(nextUiLang);
       setPhase(event.payload.phase);
       setText(event.payload.text ?? "");
       setLevel(Math.max(0, Math.min(1, Number(event.payload.level ?? 0))));
@@ -409,7 +424,18 @@ function OverlayWindowApp() {
     return <div className="h-screen w-screen bg-transparent" />;
   }
 
-  const title = phase === "listening" ? "正在听..." : phase === "thinking" ? "识别中..." : "就绪";
+  const title =
+    phase === "listening"
+      ? uiLang === "zh"
+        ? "正在听..."
+        : "Listening..."
+      : phase === "thinking"
+        ? uiLang === "zh"
+          ? "识别中..."
+          : "Processing..."
+        : uiLang === "zh"
+          ? "就绪"
+          : "Ready";
   const speakingActive = level > 0.1;
   return (
     <main className="h-screen w-screen bg-transparent p-0">
@@ -546,6 +572,11 @@ function MainApp() {
     const dict = I18N[uiLang];
     return (key: keyof typeof dict, vars?: Record<string, string | number>) =>
       formatI18n(dict[key], vars);
+  }, [uiLang]);
+
+  useEffect(() => {
+    const backendLang = uiLang === "zh" ? "zh-CN" : "en-US";
+    invoke<HotkeySettings>("set_ui_language", { language: backendLang }).catch(() => {});
   }, [uiLang]);
 
   function normalizeHotkeyLabel(value: string) {
