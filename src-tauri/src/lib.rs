@@ -2177,11 +2177,11 @@ pub fn run() {
             }
 
             if let Some(main) = app.get_webview_window("main") {
-                let main_window = main.clone();
+                let app_handle = app.handle().clone();
                 let _ = main.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        let _ = main_window.hide();
+                        app_handle.exit(0);
                     }
                 });
             }
