@@ -4,14 +4,13 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::{Deserialize, Serialize};
 use sherpa_rs::{paraformer::ParaformerConfig, paraformer::ParaformerRecognizer};
 use std::{
-    cell::RefCell,
     collections::HashMap,
     ffi::c_void,
     fs,
     io::{BufWriter, Cursor, Read, Seek, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition, Position, Size, WindowEvent};
@@ -85,10 +84,12 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                     active_action = Some(action);
                     let shortcut = if shift_down { "Fn+Shift" } else { "Fn" };
                     emit_hotkey_event(&app_handle, action, shortcut, "pressed");
+                    handle_native_hotkey_event(&app_handle, action, "pressed");
                 }
             } else if !is_down && was_down {
                 if let Some(action) = active_action.take() {
                     emit_hotkey_event(&app_handle, action, "Fn", "released");
+                    handle_native_hotkey_event(&app_handle, action, "released");
                 }
             }
             was_down = is_down;
@@ -180,6 +181,7 @@ struct AppState {
     translation_target: Mutex<TranslationTargetLang>,
     hotkey_runtime: Mutex<HotkeyRuntimeState>,
     native_hotkey_session: Mutex<NativeHotkeySession>,
+    native_recorder_tx: Mutex<Option<mpsc::Sender<NativeRecorderCommand>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -243,8 +245,9 @@ struct NativeHotkeySession {
     active_action: Option<String>,
 }
 
-thread_local! {
-    static NATIVE_RECORDER: RefCell<Option<NativeRecorder>> = const { RefCell::new(None) };
+enum NativeRecorderCommand {
+    Start { action: String },
+    Stop { action: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -332,6 +335,7 @@ impl Default for AppState {
                 suppress_dictation_until: None,
             }),
             native_hotkey_session: Mutex::new(NativeHotkeySession::default()),
+            native_recorder_tx: Mutex::new(None),
         }
     }
 }
@@ -971,9 +975,8 @@ fn transcribe_samples(
     Ok(result.text)
 }
 
-fn start_native_recording(_app: &AppHandle) -> Result<(), String> {
-    let already_active = NATIVE_RECORDER.with(|cell| cell.borrow().is_some());
-    if already_active {
+fn start_native_recording_internal(recorder: &mut Option<NativeRecorder>) -> Result<(), String> {
+    if recorder.is_some() {
         return Ok(());
     }
 
@@ -1043,20 +1046,20 @@ fn start_native_recording(_app: &AppHandle) -> Result<(), String> {
     stream
         .play()
         .map_err(|e| format!("failed to start input stream: {e}"))?;
-    NATIVE_RECORDER.with(|cell| {
-        *cell.borrow_mut() = Some(NativeRecorder {
-            stream,
-            samples,
-            sample_rate,
-            channels,
-        });
+    *recorder = Some(NativeRecorder {
+        stream,
+        samples,
+        sample_rate,
+        channels,
     });
     Ok(())
 }
 
-fn stop_native_recording(_app: &AppHandle) -> Result<(Vec<f32>, u32, u16), String> {
-    let recorder = NATIVE_RECORDER
-        .with(|cell| cell.borrow_mut().take())
+fn stop_native_recording_internal(
+    recorder: &mut Option<NativeRecorder>,
+) -> Result<(Vec<f32>, u32, u16), String> {
+    let recorder = recorder
+        .take()
         .ok_or_else(|| "native recorder not active".to_string())?;
     drop(recorder.stream);
     let samples = recorder
@@ -1686,14 +1689,27 @@ fn emit_overlay_state(
     text: Option<String>,
     level: Option<f32>,
 ) -> Result<(), String> {
-    let overlay = ensure_overlay_window(app)?;
     let payload = OverlayStatePayload {
         phase: phase.to_string(),
         text,
         level,
     };
+    let app_handle = app.clone();
+    app.run_on_main_thread(move || {
+        if let Err(err) = emit_overlay_state_on_main_thread(&app_handle, payload) {
+            eprintln!("[typemore] overlay update failed: {}", err);
+        }
+    })
+    .map_err(|e| format!("failed to schedule overlay update on main thread: {e}"))
+}
 
-    if phase == "hidden" {
+fn emit_overlay_state_on_main_thread(
+    app: &AppHandle,
+    payload: OverlayStatePayload,
+) -> Result<(), String> {
+    let overlay = ensure_overlay_window(app)?;
+
+    if payload.phase == "hidden" {
         overlay
             .emit(OVERLAY_EVENT, payload.clone())
             .map_err(|e| format!("failed to emit overlay state to overlay window: {e}"))?;
@@ -1812,11 +1828,143 @@ fn hide_overlay(app: AppHandle) -> Result<(), String> {
     emit_overlay_state(&app, "hidden", None, None)
 }
 
-fn handle_native_hotkey_start(app: &AppHandle, action: &str) {
-    if let Err(err) = start_native_recording(app) {
-        let _ = emit_overlay_state(app, "ready", Some(format!("录音启动失败: {err}")), None);
-        return;
+fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
+    let (tx, rx) = mpsc::channel::<NativeRecorderCommand>();
+    {
+        let state = app.state::<AppState>();
+        let mut lock = state
+            .native_recorder_tx
+            .lock()
+            .map_err(|_| "failed to init native recorder channel".to_string())?;
+        *lock = Some(tx);
     }
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let mut recorder: Option<NativeRecorder> = None;
+        while let Ok(cmd) = rx.recv() {
+            match cmd {
+                NativeRecorderCommand::Start { action } => {
+                    if let Err(err) = start_native_recording_internal(&mut recorder) {
+                        let _ = emit_overlay_state(
+                            &app_handle,
+                            "ready",
+                            Some(format!("录音启动失败: {err}")),
+                            None,
+                        );
+                        let _ = app_handle
+                            .state::<AppState>()
+                            .native_hotkey_session
+                            .lock()
+                            .map(|mut s| s.active_action = None);
+                        continue;
+                    }
+                    let _ = emit_overlay_state(&app_handle, "listening", Some(action), Some(0.0));
+                }
+                NativeRecorderCommand::Stop { action } => {
+                    let _ = emit_overlay_state(&app_handle, "thinking", None, None);
+                    let (samples_raw, sample_rate, channels) =
+                        match stop_native_recording_internal(&mut recorder) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                let _ = emit_overlay_state(
+                                    &app_handle,
+                                    "ready",
+                                    Some(format!("录音停止失败: {err}")),
+                                    None,
+                                );
+                                let _ = app_handle
+                                    .state::<AppState>()
+                                    .native_hotkey_session
+                                    .lock()
+                                    .map(|mut s| s.active_action = None);
+                                continue;
+                            }
+                        };
+                    let _ = app_handle
+                        .state::<AppState>()
+                        .native_hotkey_session
+                        .lock()
+                        .map(|mut s| s.active_action = None);
+
+                    if samples_raw.is_empty() {
+                        let _ = emit_overlay_state(&app_handle, "ready", Some("未检测到语音".into()), None);
+                        continue;
+                    }
+
+                    let mono = mix_to_mono(&samples_raw, channels);
+                    let (model, tokens) = match model_files_if_ready(&app_handle) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            let _ = emit_overlay_state(
+                                &app_handle,
+                                "ready",
+                                Some(format!("模型未就绪: {err}")),
+                                None,
+                            );
+                            continue;
+                        }
+                    };
+
+                    let mut text = match transcribe_samples(&model, &tokens, sample_rate, &mono) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            let _ = emit_overlay_state(
+                                &app_handle,
+                                "ready",
+                                Some(format!("识别失败: {err}")),
+                                None,
+                            );
+                            continue;
+                        }
+                    };
+                    if action == "toggle-translation" {
+                        let target = resolve_translation_target(&app_handle, &text).to_string();
+                        if let Ok(translated) = translate_text_best_effort(text.clone(), Some(target)) {
+                            text = translated;
+                        }
+                    }
+
+                    if let Ok(wav_data) = encode_wav_i16_mono(&mono, sample_rate) {
+                        let prefix = if action == "toggle-translation" {
+                            "translation"
+                        } else {
+                            "recording"
+                        };
+                        let _ = persist_recording_with_text(&app_handle, &wav_data, &text, prefix);
+                    }
+
+                    let output = text.trim().to_string();
+                    if output.is_empty() {
+                        let _ = emit_overlay_state(
+                            &app_handle,
+                            "ready",
+                            Some("未识别到有效文本".into()),
+                            None,
+                        );
+                    } else if let Err(err) = type_text_to_focused_app_impl(&app_handle, &output) {
+                        let _ = emit_overlay_state(
+                            &app_handle,
+                            "ready",
+                            Some(format!("发送失败（已保留文本）: {err}")),
+                            None,
+                        );
+                    } else {
+                        let _ = emit_overlay_state(&app_handle, "ready", Some(output), None);
+                    }
+
+                    let app_clone = app_handle.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(1600));
+                        let _ = emit_overlay_state(&app_clone, "hidden", None, None);
+                    });
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+fn handle_native_hotkey_start(app: &AppHandle, action: &str) {
     {
         let state = app.state::<AppState>();
         let maybe_session = state.native_hotkey_session.lock();
@@ -1824,7 +1972,17 @@ fn handle_native_hotkey_start(app: &AppHandle, action: &str) {
             session.active_action = Some(action.to_string());
         }
     }
-    let _ = emit_overlay_state(app, "listening", None, Some(0.0));
+    let tx = app
+        .state::<AppState>()
+        .native_recorder_tx
+        .lock()
+        .ok()
+        .and_then(|v| v.clone());
+    if let Some(tx) = tx {
+        let _ = tx.send(NativeRecorderCommand::Start {
+            action: action.to_string(),
+        });
+    }
 }
 
 fn handle_native_hotkey_stop(app: &AppHandle, action: &str) {
@@ -1839,79 +1997,17 @@ fn handle_native_hotkey_stop(app: &AppHandle, action: &str) {
     if active_action.as_deref() != Some(action) {
         return;
     }
-
-    let _ = emit_overlay_state(app, "thinking", None, None);
-    let (samples_raw, sample_rate, channels) = match stop_native_recording(app) {
-        Ok(v) => v,
-        Err(err) => {
-            let _ = emit_overlay_state(app, "ready", Some(format!("录音停止失败: {err}")), None);
-            return;
-        }
-    };
-    {
-        let state = app.state::<AppState>();
-        let maybe_session = state.native_hotkey_session.lock();
-        if let Ok(mut session) = maybe_session {
-            session.active_action = None;
-        }
+    let tx = app
+        .state::<AppState>()
+        .native_recorder_tx
+        .lock()
+        .ok()
+        .and_then(|v| v.clone());
+    if let Some(tx) = tx {
+        let _ = tx.send(NativeRecorderCommand::Stop {
+            action: action.to_string(),
+        });
     }
-
-    if samples_raw.is_empty() {
-        let _ = emit_overlay_state(app, "ready", Some("未检测到语音".into()), None);
-        return;
-    }
-
-    let mono = mix_to_mono(&samples_raw, channels);
-    let (model, tokens) = match model_files_if_ready(app) {
-        Ok(v) => v,
-        Err(err) => {
-            let _ = emit_overlay_state(app, "ready", Some(format!("模型未就绪: {err}")), None);
-            return;
-        }
-    };
-
-    let mut text = match transcribe_samples(&model, &tokens, sample_rate, &mono) {
-        Ok(v) => v,
-        Err(err) => {
-            let _ = emit_overlay_state(app, "ready", Some(format!("识别失败: {err}")), None);
-            return;
-        }
-    };
-    if action == "toggle-translation" {
-        let target = resolve_translation_target(app, &text).to_string();
-        if let Ok(translated) = translate_text_best_effort(text.clone(), Some(target)) {
-            text = translated;
-        }
-    }
-
-    if let Ok(wav_data) = encode_wav_i16_mono(&mono, sample_rate) {
-        let prefix = if action == "toggle-translation" {
-            "translation"
-        } else {
-            "recording"
-        };
-        let _ = persist_recording_with_text(app, &wav_data, &text, prefix);
-    }
-
-    let output = text.trim().to_string();
-    if output.is_empty() {
-        let _ = emit_overlay_state(app, "ready", Some("未识别到有效文本".into()), None);
-    } else if let Err(err) = type_text_to_focused_app_impl(app, &output) {
-        let _ = emit_overlay_state(
-            app,
-            "ready",
-            Some(format!("发送失败（已保留文本）: {err}")),
-            None,
-        );
-    } else {
-        let _ = emit_overlay_state(app, "ready", Some(output), None);
-    }
-
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1600));
-        let _ = emit_overlay_state(&app_clone, "hidden", None, None);
-    });
 }
 
 fn handle_native_hotkey_event(app: &AppHandle, action: &str, state: &str) {
@@ -2072,6 +2168,12 @@ pub fn run() {
                 let _ = overlay.once("tauri://error", |_| {
                     eprintln!("[typemore] overlay webview error");
                 });
+            }
+
+            if let Err(err) = spawn_native_recorder_worker(app.handle()) {
+                eprintln!("[typemore] failed to start native recorder worker: {}", err);
+            } else {
+                eprintln!("[typemore] native recorder worker active");
             }
 
             if let Some(main) = app.get_webview_window("main") {
