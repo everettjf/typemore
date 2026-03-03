@@ -33,6 +33,8 @@ const OVERLAY_WIDTH: f64 = 210.0;
 const OVERLAY_HEIGHT: f64 = 25.0;
 const OVERLAY_BOTTOM_MARGIN: i32 = 150;
 const OVERLAY_TOP_MARGIN: i32 = 90;
+const MAX_RECORDING_SECS: u64 = 90;
+const MAX_NON_IDLE_STUCK_SECS: u64 = 45;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -81,6 +83,10 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                     } else {
                         "toggle-dictation"
                     };
+                    eprintln!(
+                        "[typemore][fn] pressed action={} shift={}",
+                        action, shift_down
+                    );
                     active_action = Some(action);
                     let shortcut = if shift_down { "Fn+Shift" } else { "Fn" };
                     emit_hotkey_event(&app_handle, action, shortcut, "pressed");
@@ -88,6 +94,7 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                 }
             } else if !is_down && was_down {
                 if let Some(action) = active_action.take() {
+                    eprintln!("[typemore][fn] released action={}", action);
                     emit_hotkey_event(&app_handle, action, "Fn", "released");
                     handle_native_hotkey_event(&app_handle, action, "released");
                 }
@@ -240,14 +247,49 @@ struct NativeRecorder {
     channels: u16,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeRecorderState {
+    Idle,
+    Starting,
+    Recording,
+    Stopping,
+    Processing,
+}
+
+impl NativeRecorderState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            NativeRecorderState::Idle => "idle",
+            NativeRecorderState::Starting => "starting",
+            NativeRecorderState::Recording => "recording",
+            NativeRecorderState::Stopping => "stopping",
+            NativeRecorderState::Processing => "processing",
+        }
+    }
+}
+
 struct NativeHotkeySession {
     active_action: Option<String>,
+    state: NativeRecorderState,
+    state_since: Instant,
+    recording_started_at: Option<Instant>,
+}
+
+impl Default for NativeHotkeySession {
+    fn default() -> Self {
+        Self {
+            active_action: None,
+            state: NativeRecorderState::Idle,
+            state_since: Instant::now(),
+            recording_started_at: None,
+        }
+    }
 }
 
 enum NativeRecorderCommand {
     Start { action: String },
     Stop { action: String },
+    Reset { reason: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -308,6 +350,10 @@ fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str)
         }
     }
 
+    eprintln!(
+        "[typemore][hotkey] action={} shortcut={} state={}",
+        action, shortcut, state
+    );
     let _ = app.emit(
         HOTKEY_EVENT,
         GlobalShortcutPayload {
@@ -316,6 +362,32 @@ fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str)
             state: state.to_string(),
         },
     );
+}
+
+fn set_native_recorder_state(
+    app: &AppHandle,
+    state: NativeRecorderState,
+    active_action: Option<String>,
+    recording_started_at: Option<Instant>,
+) {
+    if let Ok(mut session) = app.state::<AppState>().native_hotkey_session.lock() {
+        let from = session.state.as_str();
+        let to = state.as_str();
+        let action_before = session.active_action.clone().unwrap_or_else(|| "-".into());
+        session.state = state;
+        session.state_since = Instant::now();
+        session.active_action = active_action;
+        session.recording_started_at = recording_started_at;
+        let action_after = session.active_action.clone().unwrap_or_else(|| "-".into());
+        eprintln!(
+            "[typemore][recorder] state {} -> {} action {} -> {}",
+            from, to, action_before, action_after
+        );
+    }
+}
+
+fn reset_native_session_to_idle(app: &AppHandle) {
+    set_native_recorder_state(app, NativeRecorderState::Idle, None, None);
 }
 
 impl Default for AppState {
@@ -1844,50 +1916,74 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
         while let Ok(cmd) = rx.recv() {
             match cmd {
                 NativeRecorderCommand::Start { action } => {
+                    eprintln!("[typemore][recorder] cmd=start action={}", action);
+                    set_native_recorder_state(
+                        &app_handle,
+                        NativeRecorderState::Starting,
+                        Some(action.clone()),
+                        None,
+                    );
                     if let Err(err) = start_native_recording_internal(&mut recorder) {
+                        eprintln!(
+                            "[typemore][recorder] start failed action={} error={}",
+                            action, err
+                        );
                         let _ = emit_overlay_state(
                             &app_handle,
                             "ready",
                             Some(format!("录音启动失败: {err}")),
                             None,
                         );
-                        let _ = app_handle
-                            .state::<AppState>()
-                            .native_hotkey_session
-                            .lock()
-                            .map(|mut s| s.active_action = None);
+                        reset_native_session_to_idle(&app_handle);
                         continue;
                     }
+                    eprintln!("[typemore][recorder] start ok action={}", action);
+                    set_native_recorder_state(
+                        &app_handle,
+                        NativeRecorderState::Recording,
+                        Some(action.clone()),
+                        Some(Instant::now()),
+                    );
                     let _ = emit_overlay_state(&app_handle, "listening", Some(action), Some(0.0));
                 }
                 NativeRecorderCommand::Stop { action } => {
+                    eprintln!("[typemore][recorder] cmd=stop action={}", action);
+                    set_native_recorder_state(
+                        &app_handle,
+                        NativeRecorderState::Stopping,
+                        Some(action.clone()),
+                        None,
+                    );
                     let _ = emit_overlay_state(&app_handle, "thinking", None, None);
                     let (samples_raw, sample_rate, channels) =
                         match stop_native_recording_internal(&mut recorder) {
                             Ok(v) => v,
                             Err(err) => {
+                                eprintln!(
+                                    "[typemore][recorder] stop failed action={} error={}",
+                                    action, err
+                                );
                                 let _ = emit_overlay_state(
                                     &app_handle,
                                     "ready",
                                     Some(format!("录音停止失败: {err}")),
                                     None,
                                 );
-                                let _ = app_handle
-                                    .state::<AppState>()
-                                    .native_hotkey_session
-                                    .lock()
-                                    .map(|mut s| s.active_action = None);
+                                reset_native_session_to_idle(&app_handle);
                                 continue;
                             }
                         };
-                    let _ = app_handle
-                        .state::<AppState>()
-                        .native_hotkey_session
-                        .lock()
-                        .map(|mut s| s.active_action = None);
+                    set_native_recorder_state(
+                        &app_handle,
+                        NativeRecorderState::Processing,
+                        Some(action.clone()),
+                        None,
+                    );
 
                     if samples_raw.is_empty() {
+                        eprintln!("[typemore][recorder] empty-audio action={}", action);
                         let _ = emit_overlay_state(&app_handle, "ready", Some("未检测到语音".into()), None);
+                        reset_native_session_to_idle(&app_handle);
                         continue;
                     }
 
@@ -1901,27 +1997,48 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                                 Some(format!("模型未就绪: {err}")),
                                 None,
                             );
+                            reset_native_session_to_idle(&app_handle);
                             continue;
                         }
                     };
 
+                    let transcribe_started = Instant::now();
                     let mut text = match transcribe_samples(&model, &tokens, sample_rate, &mono) {
                         Ok(v) => v,
                         Err(err) => {
+                            eprintln!(
+                                "[typemore][recorder] transcribe failed action={} error={}",
+                                action, err
+                            );
                             let _ = emit_overlay_state(
                                 &app_handle,
                                 "ready",
                                 Some(format!("识别失败: {err}")),
                                 None,
                             );
+                            reset_native_session_to_idle(&app_handle);
                             continue;
                         }
                     };
+                    eprintln!(
+                        "[typemore][recorder] transcribe done action={} samples={} rate={} channels={} elapsed_ms={}",
+                        action,
+                        samples_raw.len(),
+                        sample_rate,
+                        channels,
+                        transcribe_started.elapsed().as_millis()
+                    );
                     if action == "toggle-translation" {
+                        let translate_started = Instant::now();
                         let target = resolve_translation_target(&app_handle, &text).to_string();
                         if let Ok(translated) = translate_text_best_effort(text.clone(), Some(target)) {
                             text = translated;
                         }
+                        eprintln!(
+                            "[typemore][recorder] translation done action={} elapsed_ms={}",
+                            action,
+                            translate_started.elapsed().as_millis()
+                        );
                     }
 
                     if let Ok(wav_data) = encode_wav_i16_mono(&mono, sample_rate) {
@@ -1951,10 +2068,29 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                     } else {
                         let _ = emit_overlay_state(&app_handle, "ready", Some(output), None);
                     }
+                    reset_native_session_to_idle(&app_handle);
 
                     let app_clone = app_handle.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_millis(1600));
+                        let _ = emit_overlay_state(&app_clone, "hidden", None, None);
+                    });
+                }
+                NativeRecorderCommand::Reset { reason } => {
+                    eprintln!("[typemore][recorder] cmd=reset reason={}", reason);
+                    if recorder.is_some() {
+                        let _ = stop_native_recording_internal(&mut recorder);
+                    }
+                    reset_native_session_to_idle(&app_handle);
+                    let _ = emit_overlay_state(
+                        &app_handle,
+                        "ready",
+                        Some("录音已自动重置，请重试".into()),
+                        None,
+                    );
+                    let app_clone = app_handle.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_millis(1200));
                         let _ = emit_overlay_state(&app_clone, "hidden", None, None);
                     });
                 }
@@ -1964,37 +2100,87 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn spawn_native_recorder_watchdog(app: &AppHandle) {
+    let app_handle = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let snapshot = app_handle
+            .state::<AppState>()
+            .native_hotkey_session
+            .lock()
+            .ok()
+            .map(|s| (s.state, s.state_since, s.recording_started_at, s.active_action.clone()));
+        let Some((state, state_since, recording_started_at, action)) = snapshot else {
+            continue;
+        };
+        let now = Instant::now();
+        let should_reset = match state {
+            NativeRecorderState::Recording => recording_started_at
+                .is_some_and(|started| now.duration_since(started).as_secs() > MAX_RECORDING_SECS),
+            NativeRecorderState::Starting
+            | NativeRecorderState::Stopping
+            | NativeRecorderState::Processing => {
+                now.duration_since(state_since).as_secs() > MAX_NON_IDLE_STUCK_SECS
+            }
+            NativeRecorderState::Idle => false,
+        };
+        if !should_reset {
+            continue;
+        }
+        eprintln!(
+            "[typemore][watchdog] timeout state={} action={} -> reset",
+            state.as_str(),
+            action.unwrap_or_else(|| "-".into())
+        );
+        if let Ok(mut session) = app_handle.state::<AppState>().native_hotkey_session.lock() {
+            if session.state == state {
+                session.state = NativeRecorderState::Idle;
+                session.state_since = Instant::now();
+                session.recording_started_at = None;
+                session.active_action = None;
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        }
+        let tx = app_handle
+            .state::<AppState>()
+            .native_recorder_tx
+            .lock()
+            .ok()
+            .and_then(|v| v.clone());
+        if let Some(tx) = tx {
+            let _ = tx.send(NativeRecorderCommand::Reset {
+                reason: format!("watchdog-timeout-{}", state.as_str()),
+            });
+        }
+    });
+}
+
 fn handle_native_hotkey_start(app: &AppHandle, action: &str) {
+    let mut should_start = false;
     {
         let state = app.state::<AppState>();
         let maybe_session = state.native_hotkey_session.lock();
         if let Ok(mut session) = maybe_session {
+            if session.state != NativeRecorderState::Idle {
+                eprintln!(
+                    "[typemore][recorder] ignore start action={} state={} active_action={}",
+                    action,
+                    session.state.as_str(),
+                    session.active_action.clone().unwrap_or_else(|| "-".into())
+                );
+                return;
+            }
+            session.state = NativeRecorderState::Starting;
+            session.state_since = Instant::now();
+            session.recording_started_at = None;
             session.active_action = Some(action.to_string());
+            should_start = true;
         }
     }
-    let tx = app
-        .state::<AppState>()
-        .native_recorder_tx
-        .lock()
-        .ok()
-        .and_then(|v| v.clone());
-    if let Some(tx) = tx {
-        let _ = tx.send(NativeRecorderCommand::Start {
-            action: action.to_string(),
-        });
-    }
-}
-
-fn handle_native_hotkey_stop(app: &AppHandle, action: &str) {
-    let active_action = {
-        let state = app.state::<AppState>();
-        state
-            .native_hotkey_session
-            .lock()
-            .ok()
-            .and_then(|s| s.active_action.clone())
-    };
-    if active_action.as_deref() != Some(action) {
+    if !should_start {
         return;
     }
     let tx = app
@@ -2004,9 +2190,55 @@ fn handle_native_hotkey_stop(app: &AppHandle, action: &str) {
         .ok()
         .and_then(|v| v.clone());
     if let Some(tx) = tx {
+        eprintln!("[typemore][recorder] queue start action={}", action);
+        let _ = tx.send(NativeRecorderCommand::Start {
+            action: action.to_string(),
+        });
+    } else {
+        eprintln!("[typemore][recorder] start dropped, worker not ready");
+        reset_native_session_to_idle(app);
+    }
+}
+
+fn handle_native_hotkey_stop(app: &AppHandle, action: &str) {
+    let mut should_stop = false;
+    let mut active_action: Option<String> = None;
+    if let Ok(mut session) = app.state::<AppState>().native_hotkey_session.lock() {
+        active_action = session.active_action.clone();
+        if active_action.as_deref() == Some(action)
+            && matches!(
+                session.state,
+                NativeRecorderState::Starting | NativeRecorderState::Recording
+            )
+        {
+            session.state = NativeRecorderState::Stopping;
+            session.state_since = Instant::now();
+            session.recording_started_at = None;
+            should_stop = true;
+        }
+    }
+    if !should_stop {
+        eprintln!(
+            "[typemore][recorder] ignore stop action={} active_action={}",
+            action,
+            active_action.unwrap_or_else(|| "-".into())
+        );
+        return;
+    }
+    let tx = app
+        .state::<AppState>()
+        .native_recorder_tx
+        .lock()
+        .ok()
+        .and_then(|v| v.clone());
+    if let Some(tx) = tx {
+        eprintln!("[typemore][recorder] queue stop action={}", action);
         let _ = tx.send(NativeRecorderCommand::Stop {
             action: action.to_string(),
         });
+    } else {
+        eprintln!("[typemore][recorder] stop dropped, worker not ready");
+        reset_native_session_to_idle(app);
     }
 }
 
@@ -2017,6 +2249,10 @@ fn handle_native_hotkey_event(app: &AppHandle, action: &str, state: &str) {
         .lock()
         .map(|v| *v)
         .unwrap_or(HotkeyTriggerMode::Tap);
+    eprintln!(
+        "[typemore][hotkey] dispatch action={} state={} mode={:?}",
+        action, state, trigger_mode
+    );
 
     match trigger_mode {
         HotkeyTriggerMode::Tap => {
@@ -2075,6 +2311,12 @@ pub fn run() {
                     } else {
                         return;
                     };
+                    eprintln!(
+                        "[typemore][hotkey] global action={} shortcut={} state={}",
+                        action,
+                        shortcut,
+                        state
+                    );
                     emit_hotkey_event(app, action, &shortcut.to_string(), state);
                     handle_native_hotkey_event(app, action, state);
                 })
@@ -2174,6 +2416,8 @@ pub fn run() {
                 eprintln!("[typemore] failed to start native recorder worker: {}", err);
             } else {
                 eprintln!("[typemore] native recorder worker active");
+                spawn_native_recorder_watchdog(app.handle());
+                eprintln!("[typemore] native recorder watchdog active");
             }
 
             if let Some(main) = app.get_webview_window("main") {
