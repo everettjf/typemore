@@ -54,6 +54,7 @@ type HotkeyTriggerMode = "tap" | "long-press";
 type OverlayPosition = "top" | "bottom";
 type OutputMode = "auto-paste" | "paste-and-keep" | "copy-only";
 type TranslationTargetLang = "auto" | "en" | "zh-CN" | "ja" | "ko";
+type SettingsSection = "language" | "hotkey" | "cloud" | "temp";
 type CloudVendor =
   | "openai"
   | "openrouter"
@@ -202,6 +203,10 @@ const I18N = {
     dictionaryDelete: "删除词条",
     settingsTitle: "设置",
     settingsSectionGeneral: "通用",
+    settingsSectionLanguage: "语言",
+    settingsSectionHotkey: "快捷键",
+    settingsSectionCloud: "云端模型",
+    settingsSectionTemp: "临时目录",
     settingsTempDirTitle: "临时目录",
     settingsTempDirDesc: "打开应用的临时目录，用于查看当前运行过程中的临时文件。",
     settingsOpenTempDir: "打开临时目录",
@@ -337,6 +342,10 @@ const I18N = {
     dictionaryDelete: "Delete word",
     settingsTitle: "Settings",
     settingsSectionGeneral: "General",
+    settingsSectionLanguage: "Language",
+    settingsSectionHotkey: "Hotkeys",
+    settingsSectionCloud: "Cloud Models",
+    settingsSectionTemp: "Temporary Directory",
     settingsTempDirTitle: "Temporary Directory",
     settingsTempDirDesc: "Open app temporary directory to inspect runtime temp files.",
     settingsOpenTempDir: "Open Temporary Directory",
@@ -617,6 +626,7 @@ function OverlayWindowApp() {
 function MainApp() {
   const [page, setPage] = useState<Page>("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("language");
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
@@ -1685,7 +1695,10 @@ function MainApp() {
             <button
               type="button"
               className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-              onClick={() => setSettingsOpen(true)}
+              onClick={() => {
+                setSettingsSection("language");
+                setSettingsOpen(true);
+              }}
             >
               <Settings size={16} />
               {t("navSettings")}
@@ -1963,7 +1976,28 @@ function MainApp() {
           <div className="grid h-[min(680px,90vh)] w-[min(980px,95vw)] grid-cols-[220px_1fr] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
             <aside className="border-r border-slate-200 bg-slate-50/80 p-3">
               <div className="mb-3 px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{t("settingsTitle")}</div>
-              <div className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-900 shadow-sm">{t("settingsSectionGeneral")}</div>
+              <div className="space-y-1">
+                {([
+                  { key: "language", label: t("settingsSectionLanguage") },
+                  { key: "hotkey", label: t("settingsSectionHotkey") },
+                  { key: "cloud", label: t("settingsSectionCloud") },
+                  { key: "temp", label: t("settingsSectionTemp") },
+                ] as Array<{ key: SettingsSection; label: string }>).map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setSettingsSection(item.key)}
+                    className={cn(
+                      "w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition",
+                      settingsSection === item.key
+                        ? "bg-white text-slate-900 shadow-sm"
+                        : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
             </aside>
 
             <section className="flex min-h-0 flex-col overflow-hidden">
@@ -1976,6 +2010,7 @@ function MainApp() {
 
               <div className="min-h-0 flex-1 overflow-y-auto p-6">
                 <div className="space-y-4 pb-2">
+                  {settingsSection === "language" && (
                   <Card className="p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsLanguageTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
@@ -1992,7 +2027,9 @@ function MainApp() {
                       </select>
                     </div>
                   </Card>
+                  )}
 
+                  {settingsSection === "hotkey" && (
                   <Card className="p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
@@ -2117,7 +2154,9 @@ function MainApp() {
                       </div>
                     </div>
                   </Card>
+                  )}
 
+                  {settingsSection === "cloud" && (
                   <Card className="p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsCloudTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsCloudDesc")}</p>
@@ -2309,7 +2348,9 @@ function MainApp() {
                       </div>
                     </div>
                   </Card>
+                  )}
 
+                  {settingsSection === "temp" && (
                   <Card className="p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsTempDirTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
@@ -2320,6 +2361,7 @@ function MainApp() {
                       </Button>
                     </div>
                   </Card>
+                  )}
                 </div>
               </div>
             </section>
