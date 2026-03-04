@@ -1,7 +1,17 @@
 @import "tailwindcss";
 
 :root {
-  font-family: "Inter", "PingFang SC", "SF Pro Text", sans-serif;
+  --tm-bg-1: #f3f8ff;
+  --tm-bg-2: #f8fbff;
+  --tm-bg-3: #ecf6ff;
+  --tm-ink-1: #0f172a;
+  --tm-ink-2: #334155;
+  --tm-border-soft: rgba(148, 163, 184, 0.26);
+  --tm-glass: rgba(255, 255, 255, 0.82);
+  --tm-glass-strong: rgba(255, 255, 255, 0.94);
+  --tm-shadow-1: 0 22px 50px rgba(15, 23, 42, 0.1);
+  --tm-shadow-2: 0 14px 32px rgba(37, 99, 235, 0.12);
+  font-family: "Avenir Next", "SF Pro Rounded", "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
 }
 
 html,
@@ -13,4 +23,65 @@ body,
 body {
   margin: 0;
   overflow: hidden;
+  color: var(--tm-ink-1);
+  background:
+    radial-gradient(1200px 460px at -12% -8%, #d9ebff 0%, transparent 60%),
+    radial-gradient(860px 420px at 110% 0%, #d2f3ff 0%, transparent 55%),
+    linear-gradient(145deg, var(--tm-bg-1) 0%, var(--tm-bg-2) 48%, var(--tm-bg-3) 100%);
+}
+
+.typemore-app {
+  position: relative;
+}
+
+.typemore-app::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black 0%, transparent 95%);
+}
+
+.tm-shell {
+  border: 1px solid var(--tm-border-soft);
+  background: linear-gradient(180deg, var(--tm-glass) 0%, var(--tm-glass-strong) 100%);
+  box-shadow: var(--tm-shadow-1);
+}
+
+.tm-side {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.tm-main {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: var(--tm-shadow-2);
+}
+
+.tm-settings-mask {
+  background: rgba(15, 23, 42, 0.3);
+  backdrop-filter: blur(5px);
+}
+
+.tm-settings-panel {
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.2);
+}
+
+.tm-settings-sidebar {
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, rgba(241, 245, 249, 0.92) 100%);
+}
+
+.tm-settings-content {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 250, 252, 0.95) 100%);
+}
+
+.tm-settings-card {
+  border-color: rgba(148, 163, 184, 0.26) !important;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
 }

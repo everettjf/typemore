@@ -1659,9 +1659,9 @@ function MainApp() {
   );
 
   return (
-    <main className="h-screen bg-[radial-gradient(circle_at_top_left,_#edf4ff,_#f8fafc_50%,_#eef7ff)] p-0 text-slate-900">
-      <div className="mx-auto grid h-full max-w-[1540px] grid-cols-1 gap-3 rounded-3xl border border-white/70 bg-white/60 p-3 shadow-2xl shadow-slate-200/70 backdrop-blur md:grid-cols-[230px_1fr] md:p-4">
-        <aside className="flex min-h-0 flex-col rounded-2xl border border-slate-200/80 bg-white/95 p-3">
+    <main className="typemore-app h-screen p-0 text-slate-900">
+      <div className="tm-shell mx-auto grid h-full max-w-[1540px] grid-cols-1 gap-3 rounded-3xl p-3 backdrop-blur md:grid-cols-[230px_1fr] md:p-4">
+        <aside className="tm-side flex min-h-0 flex-col rounded-2xl bg-white/95 p-3">
           <div className="px-2 pb-3 pt-1">
             <div className="flex items-center gap-2">
               <img src="/favicon.png" alt="Type More" className="h-7 w-7 rounded-md" />
@@ -1706,7 +1706,7 @@ function MainApp() {
           </div>
         </aside>
 
-        <section className="min-h-0 overflow-y-auto rounded-2xl border border-slate-200/80 bg-white/95 p-4 md:p-5">
+        <section className="tm-main min-h-0 overflow-y-auto rounded-2xl bg-white/95 p-4 md:p-5">
           {page === "home" && (
             <div className="grid min-h-full gap-4 md:grid-rows-[auto_auto_auto_1fr]">
               <header className="flex flex-wrap items-center justify-between gap-3">
@@ -1972,9 +1972,9 @@ function MainApp() {
       </div>
 
       {settingsOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/35 p-4 backdrop-blur-[2px]">
-          <div className="grid h-[min(680px,90vh)] w-[min(980px,95vw)] grid-cols-[220px_1fr] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <aside className="border-r border-slate-200 bg-slate-50/80 p-3">
+        <div className="tm-settings-mask fixed inset-0 z-40 flex items-center justify-center p-4">
+          <div className="tm-settings-panel grid h-[min(680px,90vh)] w-[min(980px,95vw)] grid-cols-[220px_1fr] overflow-hidden rounded-2xl bg-white">
+            <aside className="tm-settings-sidebar border-r border-slate-200 p-3">
               <div className="mb-3 px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{t("settingsTitle")}</div>
               <div className="space-y-1">
                 {([
@@ -2000,7 +2000,7 @@ function MainApp() {
               </div>
             </aside>
 
-            <section className="flex min-h-0 flex-col overflow-hidden">
+            <section className="tm-settings-content flex min-h-0 flex-col overflow-hidden">
               <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
                 <h2 className="text-3xl font-semibold tracking-tight">{t("settingsTitle")}</h2>
                 <Button variant="outline" className="h-9 w-9 justify-center p-0" onClick={() => setSettingsOpen(false)}>
@@ -2011,7 +2011,7 @@ function MainApp() {
               <div className="min-h-0 flex-1 overflow-y-auto p-6">
                 <div className="space-y-4 pb-2">
                   {settingsSection === "language" && (
-                  <Card className="p-4">
+                  <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsLanguageTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
                     <div className="mt-4 max-w-xs">
@@ -2030,7 +2030,7 @@ function MainApp() {
                   )}
 
                   {settingsSection === "hotkey" && (
-                  <Card className="p-4">
+                  <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
                     <div className="mt-3 space-y-3">
@@ -2157,7 +2157,7 @@ function MainApp() {
                   )}
 
                   {settingsSection === "cloud" && (
-                  <Card className="p-4">
+                  <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsCloudTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsCloudDesc")}</p>
                     <div className="mt-3 space-y-3">
@@ -2351,7 +2351,7 @@ function MainApp() {
                   )}
 
                   {settingsSection === "temp" && (
-                  <Card className="p-4">
+                  <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsTempDirTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
                     <div className="mt-4">
