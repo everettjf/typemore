@@ -54,6 +54,18 @@ type HotkeyTriggerMode = "tap" | "long-press";
 type OverlayPosition = "top" | "bottom";
 type OutputMode = "auto-paste" | "paste-and-keep" | "copy-only";
 type TranslationTargetLang = "auto" | "en" | "zh-CN" | "ja" | "ko";
+type CloudVendor =
+  | "openai"
+  | "openrouter"
+  | "anthropic"
+  | "gemini"
+  | "groq"
+  | "deepseek"
+  | "mistral"
+  | "xai"
+  | "perplexity"
+  | "together"
+  | "ollama";
 
 type AccessibilityStatus = {
   supported: boolean;
@@ -86,6 +98,44 @@ type OverlayStatePayload = {
   level?: number | null;
 };
 
+type CloudProviderConfig = {
+  id: string;
+  name: string;
+  vendor: CloudVendor;
+  model: string;
+  apiKey: string;
+  baseUrl?: string | null;
+  enabled: boolean;
+  priority: number;
+};
+
+type CloudPipelineConfig = {
+  enabled: boolean;
+  optimizeProviderId: string;
+  translateProviderId: string;
+  targetLanguage: string;
+  optimizePrompt: string;
+  translatePrompt: string;
+  timeoutMs: number;
+  maxRetries: number;
+};
+
+type CloudSettings = {
+  providers: CloudProviderConfig[];
+  pipeline: CloudPipelineConfig;
+};
+
+type CloudProcessResult = {
+  finalText: string;
+  stage: "local" | "optimized" | "translated";
+  warnings: string[];
+};
+
+type TestCloudProviderResult = {
+  ok: boolean;
+  message: string;
+};
+
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
 const DEFAULT_HOTKEY_DICTATION = "CommandOrControl+Alt+Space";
@@ -94,6 +144,19 @@ const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
 const DEFAULT_OVERLAY_POSITION: OverlayPosition = "bottom";
 const DEFAULT_OUTPUT_MODE: OutputMode = "auto-paste";
 const BACKEND_NATIVE_HOTKEY_PIPELINE = true;
+const CLOUD_VENDOR_OPTIONS: Array<{ value: CloudVendor; label: string }> = [
+  { value: "openai", label: "OpenAI" },
+  { value: "openrouter", label: "OpenRouter" },
+  { value: "anthropic", label: "Anthropic" },
+  { value: "gemini", label: "Gemini" },
+  { value: "groq", label: "Groq" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "mistral", label: "Mistral" },
+  { value: "xai", label: "xAI" },
+  { value: "perplexity", label: "Perplexity" },
+  { value: "together", label: "Together AI" },
+  { value: "ollama", label: "Ollama" },
+];
 
 const I18N = {
   zh: {
@@ -175,6 +238,29 @@ const I18N = {
     settingsTranslationTargetZh: "中文",
     settingsTranslationTargetJa: "日文",
     settingsTranslationTargetKo: "韩文",
+    settingsCloudTitle: "云端模型",
+    settingsCloudDesc: "可配置多个云端厂商，用于识别后优化和翻译。",
+    settingsCloudEnabled: "启用云端后处理",
+    settingsCloudOptimizeProvider: "优化模型",
+    settingsCloudTranslateProvider: "翻译模型",
+    settingsCloudTargetLanguage: "云端目标语言",
+    settingsCloudOptimizePrompt: "优化 Prompt",
+    settingsCloudTranslatePrompt: "翻译 Prompt",
+    settingsCloudTimeoutMs: "请求超时(ms)",
+    settingsCloudRetries: "失败重试次数",
+    settingsCloudProviders: "厂商列表",
+    settingsCloudProviderName: "名称",
+    settingsCloudProviderId: "ID",
+    settingsCloudProviderVendor: "厂商",
+    settingsCloudProviderModel: "模型",
+    settingsCloudProviderApiKey: "API Key",
+    settingsCloudProviderBaseUrl: "Base URL(可选)",
+    settingsCloudProviderEnabled: "启用",
+    settingsCloudAddProvider: "新增厂商",
+    settingsCloudRemoveProvider: "删除",
+    settingsCloudSave: "保存云端设置",
+    settingsCloudTest: "测试连接",
+    transcriptCloudProcessFailed: "云端处理失败，已回退本地结果: {error}",
     languageModeLabel: "界面语言",
     langAuto: "自动（跟随系统）",
     langZh: "中文",
@@ -287,6 +373,29 @@ const I18N = {
     settingsTranslationTargetZh: "Chinese",
     settingsTranslationTargetJa: "Japanese",
     settingsTranslationTargetKo: "Korean",
+    settingsCloudTitle: "Cloud Models",
+    settingsCloudDesc: "Configure multiple cloud providers for post-ASR optimization and translation.",
+    settingsCloudEnabled: "Enable cloud post-processing",
+    settingsCloudOptimizeProvider: "Optimize model",
+    settingsCloudTranslateProvider: "Translate model",
+    settingsCloudTargetLanguage: "Cloud target language",
+    settingsCloudOptimizePrompt: "Optimize prompt",
+    settingsCloudTranslatePrompt: "Translate prompt",
+    settingsCloudTimeoutMs: "Timeout (ms)",
+    settingsCloudRetries: "Retry count",
+    settingsCloudProviders: "Providers",
+    settingsCloudProviderName: "Name",
+    settingsCloudProviderId: "ID",
+    settingsCloudProviderVendor: "Vendor",
+    settingsCloudProviderModel: "Model",
+    settingsCloudProviderApiKey: "API Key",
+    settingsCloudProviderBaseUrl: "Base URL (optional)",
+    settingsCloudProviderEnabled: "Enabled",
+    settingsCloudAddProvider: "Add provider",
+    settingsCloudRemoveProvider: "Remove",
+    settingsCloudSave: "Save cloud settings",
+    settingsCloudTest: "Test connection",
+    transcriptCloudProcessFailed: "Cloud processing failed, fallback to local text: {error}",
     languageModeLabel: "Interface language",
     langAuto: "Auto (System)",
     langZh: "Chinese",
@@ -343,6 +452,24 @@ function resolveUiLangFromLocalSetting(): UiLang {
     return "en";
   }
   return detectSystemLang();
+}
+
+function defaultCloudSettings(): CloudSettings {
+  return {
+    providers: [],
+    pipeline: {
+      enabled: false,
+      optimizeProviderId: "",
+      translateProviderId: "",
+      targetLanguage: "en",
+      optimizePrompt:
+        "You are an expert text post-processor for speech transcription.\nFix recognition errors, punctuation, casing, and spacing.\nDo not add new facts. Return only the corrected text.",
+      translatePrompt:
+        "Translate the input text into {target_language}.\nPreserve meaning and tone. Return only translated text.",
+      timeoutMs: 10000,
+      maxRetries: 1,
+    },
+  };
 }
 
 function localizedInitMessage(status: ModelInitStatus, uiLang: UiLang) {
@@ -511,6 +638,8 @@ function MainApp() {
   const [overlayPosition, setOverlayPosition] = useState<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
   const [outputMode, setOutputMode] = useState<OutputMode>(DEFAULT_OUTPUT_MODE);
   const [translationTargetLang, setTranslationTargetLang] = useState<TranslationTargetLang>("auto");
+  const [cloudSettings, setCloudSettings] = useState<CloudSettings>(defaultCloudSettings);
+  const [savingCloudSettings, setSavingCloudSettings] = useState(false);
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
@@ -759,6 +888,15 @@ function MainApp() {
     setTranslationTargetLang(settings.translationTarget);
   }
 
+  async function loadCloudSettings() {
+    try {
+      const settings = await invoke<CloudSettings>("get_cloud_settings");
+      setCloudSettings(settings);
+    } catch {
+      setCloudSettings(defaultCloudSettings());
+    }
+  }
+
   async function refreshAccessibilityStatus() {
     try {
       const status = await invoke<AccessibilityStatus>("get_accessibility_status");
@@ -796,7 +934,7 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
-    Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus(), loadGlobalShortcuts()]).catch((err) => {
+    Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus(), loadGlobalShortcuts(), loadCloudSettings()]).catch((err) => {
       setTranscript(t("transcriptInitFailed", { error: String(err) }));
     });
 
@@ -907,17 +1045,25 @@ function MainApp() {
     if (!source) {
       return source;
     }
-    if (action !== "toggle-translation") {
-      return source;
-    }
-    const targetLang = translationTargetLang === "auto" ? inferTranslationTarget(source) : translationTargetLang;
+    const isTranslate = action === "toggle-translation";
+    const targetLang = isTranslate
+      ? translationTargetLang === "auto"
+        ? inferTranslationTarget(source)
+        : translationTargetLang
+      : undefined;
     try {
-      setTranscript(t("transcriptTranslating"));
-      await setOverlayState("thinking", t("transcriptTranslating"));
-      const translated = await invoke<string>("translate_text_best_effort", { text: source, targetLang });
-      return (translated || source).trim();
+      if (isTranslate) {
+        setTranscript(t("transcriptTranslating"));
+        await setOverlayState("thinking", t("transcriptTranslating"));
+      }
+      const result = await invoke<CloudProcessResult>("process_text_with_cloud", {
+        text: source,
+        translate: isTranslate,
+        targetLang,
+      });
+      return (result.finalText || source).trim();
     } catch (err) {
-      setTranscript(t("transcriptTranslationFailed", { error: String(err) }));
+      setTranscript(t("transcriptCloudProcessFailed", { error: String(err) }));
       return source;
     }
   }
@@ -1311,6 +1457,110 @@ function MainApp() {
       setTranscript(String(err));
     } finally {
       setSavingHotkeys(false);
+    }
+  }
+
+  function updateCloudPipeline<K extends keyof CloudPipelineConfig>(key: K, value: CloudPipelineConfig[K]) {
+    setCloudSettings((prev) => ({
+      ...prev,
+      pipeline: {
+        ...prev.pipeline,
+        [key]: value,
+      },
+    }));
+  }
+
+  function updateCloudProvider(index: number, patch: Partial<CloudProviderConfig>) {
+    setCloudSettings((prev) => {
+      const providers = prev.providers.map((provider, idx) =>
+        idx === index ? { ...provider, ...patch } : provider
+      );
+      return { ...prev, providers };
+    });
+  }
+
+  function addCloudProvider() {
+    const idSuffix = Date.now().toString().slice(-6);
+    setCloudSettings((prev) => ({
+      ...prev,
+      providers: [
+        ...prev.providers,
+        {
+          id: `provider_${idSuffix}`,
+          name: `Provider ${prev.providers.length + 1}`,
+          vendor: "openai",
+          model: "gpt-4o-mini",
+          apiKey: "",
+          baseUrl: "",
+          enabled: true,
+          priority: prev.providers.length,
+        },
+      ],
+    }));
+  }
+
+  function removeCloudProvider(index: number) {
+    setCloudSettings((prev) => {
+      const removed = prev.providers[index];
+      const providers = prev.providers.filter((_, idx) => idx !== index);
+      const optimizeProviderId =
+        prev.pipeline.optimizeProviderId === removed?.id ? "" : prev.pipeline.optimizeProviderId;
+      const translateProviderId =
+        prev.pipeline.translateProviderId === removed?.id ? "" : prev.pipeline.translateProviderId;
+      return {
+        providers,
+        pipeline: {
+          ...prev.pipeline,
+          optimizeProviderId,
+          translateProviderId,
+        },
+      };
+    });
+  }
+
+  async function onSaveCloudSettings() {
+    setSavingCloudSettings(true);
+    try {
+      const providers = cloudSettings.providers.map((provider, index) => ({
+        ...provider,
+        id: provider.id.trim(),
+        name: provider.name.trim() || provider.id.trim(),
+        model: provider.model.trim(),
+        apiKey: provider.apiKey.trim(),
+        baseUrl: provider.baseUrl?.trim() || null,
+        priority: Number.isFinite(provider.priority) ? provider.priority : index,
+      }));
+      const payload: CloudSettings = {
+        providers,
+        pipeline: {
+          ...cloudSettings.pipeline,
+          targetLanguage: cloudSettings.pipeline.targetLanguage.trim() || "en",
+          optimizePrompt: cloudSettings.pipeline.optimizePrompt.trim(),
+          translatePrompt: cloudSettings.pipeline.translatePrompt.trim(),
+          timeoutMs: Math.max(1000, Math.min(120000, Number(cloudSettings.pipeline.timeoutMs) || 10000)),
+          maxRetries: Math.max(0, Math.min(4, Number(cloudSettings.pipeline.maxRetries) || 0)),
+        },
+      };
+      const saved = await invoke<CloudSettings>("set_cloud_settings", { settings: payload });
+      setCloudSettings(saved);
+    } catch (err) {
+      setTranscript(String(err));
+    } finally {
+      setSavingCloudSettings(false);
+    }
+  }
+
+  async function onTestCloudProvider(providerId: string) {
+    try {
+      const result = await invoke<TestCloudProviderResult>("test_cloud_provider", {
+        input: { providerId },
+      });
+      const message = result.ok
+        ? `${providerId}: ${result.message}`
+        : `${providerId}: ${result.message}`;
+      setTranscript(message);
+    } catch (err) {
+      setTranscript(String(err));
     }
   }
 
@@ -1864,6 +2114,198 @@ function MainApp() {
                           {t("settingsHotkeySave")}
                         </Button>
                         <Button variant="outline" onClick={onResetHotkeys} disabled={savingHotkeys}>{t("settingsHotkeyReset")}</Button>
+                      </div>
+                    </div>
+                  </Card>
+
+                  <Card className="p-4">
+                    <div className="text-lg font-semibold text-slate-900">{t("settingsCloudTitle")}</div>
+                    <p className="mt-1 text-sm text-slate-600">{t("settingsCloudDesc")}</p>
+                    <div className="mt-3 space-y-3">
+                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={cloudSettings.pipeline.enabled}
+                          onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
+                          className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                        />
+                        <span>{t("settingsCloudEnabled")}</span>
+                      </label>
+
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizeProvider")}</label>
+                          <select
+                            value={cloudSettings.pipeline.optimizeProviderId}
+                            onChange={(event) => updateCloudPipeline("optimizeProviderId", event.target.value)}
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          >
+                            <option value="">-</option>
+                            {cloudSettings.providers.map((provider) => (
+                              <option key={provider.id} value={provider.id}>
+                                {provider.name} ({provider.model})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTranslateProvider")}</label>
+                          <select
+                            value={cloudSettings.pipeline.translateProviderId}
+                            onChange={(event) => updateCloudPipeline("translateProviderId", event.target.value)}
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          >
+                            <option value="">-</option>
+                            {cloudSettings.providers.map((provider) => (
+                              <option key={provider.id} value={provider.id}>
+                                {provider.name} ({provider.model})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div>
+                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTargetLanguage")}</label>
+                          <input
+                            value={cloudSettings.pipeline.targetLanguage}
+                            onChange={(event) => updateCloudPipeline("targetLanguage", event.target.value)}
+                            placeholder="en"
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTimeoutMs")}</label>
+                          <input
+                            type="number"
+                            value={cloudSettings.pipeline.timeoutMs}
+                            onChange={(event) => updateCloudPipeline("timeoutMs", Number(event.target.value) || 10000)}
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudRetries")}</label>
+                          <input
+                            type="number"
+                            value={cloudSettings.pipeline.maxRetries}
+                            onChange={(event) => updateCloudPipeline("maxRetries", Number(event.target.value) || 0)}
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizePrompt")}</label>
+                        <textarea
+                          value={cloudSettings.pipeline.optimizePrompt}
+                          onChange={(event) => updateCloudPipeline("optimizePrompt", event.target.value)}
+                          className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTranslatePrompt")}</label>
+                        <textarea
+                          value={cloudSettings.pipeline.translatePrompt}
+                          onChange={(event) => updateCloudPipeline("translatePrompt", event.target.value)}
+                          className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm font-medium text-slate-700">{t("settingsCloudProviders")}</div>
+                        <Button variant="outline" onClick={addCloudProvider}>
+                          <Plus size={14} />
+                          {t("settingsCloudAddProvider")}
+                        </Button>
+                      </div>
+
+                      <div className="space-y-3">
+                        {cloudSettings.providers.map((provider, index) => (
+                          <div key={`${provider.id}-${index}`} className="rounded-lg border border-slate-200 p-3">
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderId")}</label>
+                                <input
+                                  value={provider.id}
+                                  onChange={(event) => updateCloudProvider(index, { id: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderName")}</label>
+                                <input
+                                  value={provider.name}
+                                  onChange={(event) => updateCloudProvider(index, { name: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderVendor")}</label>
+                                <select
+                                  value={provider.vendor}
+                                  onChange={(event) => updateCloudProvider(index, { vendor: event.target.value as CloudVendor })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                >
+                                  {CLOUD_VENDOR_OPTIONS.map((item) => (
+                                    <option key={item.value} value={item.value}>
+                                      {item.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderModel")}</label>
+                                <input
+                                  value={provider.model}
+                                  onChange={(event) => updateCloudProvider(index, { model: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderApiKey")}</label>
+                                <input
+                                  type="password"
+                                  value={provider.apiKey}
+                                  onChange={(event) => updateCloudProvider(index, { apiKey: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderBaseUrl")}</label>
+                                <input
+                                  value={provider.baseUrl ?? ""}
+                                  onChange={(event) => updateCloudProvider(index, { baseUrl: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  checked={provider.enabled}
+                                  onChange={(event) => updateCloudProvider(index, { enabled: event.target.checked })}
+                                  className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                                />
+                                {t("settingsCloudProviderEnabled")}
+                              </label>
+                              <Button variant="outline" onClick={() => void onTestCloudProvider(provider.id)}>
+                                {t("settingsCloudTest")}
+                              </Button>
+                              <Button variant="outline" onClick={() => removeCloudProvider(index)}>
+                                {t("settingsCloudRemoveProvider")}
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex gap-2">
+                        <Button variant="outline" onClick={onSaveCloudSettings} disabled={savingCloudSettings}>
+                          {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
+                          {t("settingsCloudSave")}
+                        </Button>
                       </div>
                     </div>
                   </Card>

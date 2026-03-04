@@ -1,6 +1,7 @@
 #![allow(unexpected_cfgs)]
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rig::{client::CompletionClient, completion::Prompt};
 use serde::{Deserialize, Serialize};
 use sherpa_rs::{paraformer::ParaformerConfig, paraformer::ParaformerRecognizer};
 use std::{
@@ -13,7 +14,10 @@ use std::{
     sync::{mpsc, Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition, Position, Size, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition, Position, Size,
+    WindowEvent,
+};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use walkdir::WalkDir;
 
@@ -187,6 +191,7 @@ struct AppState {
     output_mode: Mutex<OutputMode>,
     translation_target: Mutex<TranslationTargetLang>,
     ui_language: Mutex<UiLanguage>,
+    cloud_settings: Mutex<CloudSettings>,
     hotkey_runtime: Mutex<HotkeyRuntimeState>,
     native_hotkey_session: Mutex<NativeHotkeySession>,
     native_recorder_tx: Mutex<Option<mpsc::Sender<NativeRecorderCommand>>>,
@@ -234,6 +239,89 @@ enum TranslationTargetLang {
     Ja,
     #[serde(rename = "ko")]
     Ko,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum CloudVendor {
+    Openai,
+    Openrouter,
+    Anthropic,
+    Gemini,
+    Groq,
+    Deepseek,
+    Mistral,
+    Xai,
+    Perplexity,
+    Together,
+    Ollama,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudProviderConfig {
+    id: String,
+    name: String,
+    vendor: CloudVendor,
+    model: String,
+    api_key: String,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default = "default_provider_enabled")]
+    enabled: bool,
+    #[serde(default)]
+    priority: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudPipelineConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    optimize_provider_id: String,
+    #[serde(default)]
+    translate_provider_id: String,
+    #[serde(default = "default_cloud_target_language")]
+    target_language: String,
+    #[serde(default = "default_optimize_prompt")]
+    optimize_prompt: String,
+    #[serde(default = "default_translate_prompt")]
+    translate_prompt: String,
+    #[serde(default = "default_cloud_timeout_ms")]
+    timeout_ms: u64,
+    #[serde(default = "default_cloud_retries")]
+    max_retries: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudSettings {
+    #[serde(default)]
+    providers: Vec<CloudProviderConfig>,
+    #[serde(default)]
+    pipeline: CloudPipelineConfig,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CloudProcessResult {
+    final_text: String,
+    stage: String,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TestCloudProviderInput {
+    provider_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TestCloudProviderResult {
+    ok: bool,
+    message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,8 +438,7 @@ fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str)
             return;
         };
         if action == "toggle-translation" {
-            runtime.suppress_dictation_until =
-                Some(now + std::time::Duration::from_millis(260));
+            runtime.suppress_dictation_until = Some(now + std::time::Duration::from_millis(260));
         } else if action == "toggle-dictation"
             && runtime
                 .suppress_dictation_until
@@ -431,6 +518,7 @@ impl Default for AppState {
             output_mode: Mutex::new(default_output_mode()),
             translation_target: Mutex::new(default_translation_target()),
             ui_language: Mutex::new(default_ui_language()),
+            cloud_settings: Mutex::new(CloudSettings::default()),
             hotkey_runtime: Mutex::new(HotkeyRuntimeState {
                 suppress_dictation_until: None,
             }),
@@ -481,6 +569,54 @@ const fn default_ui_language() -> UiLanguage {
     UiLanguage::Zh
 }
 
+const fn default_provider_enabled() -> bool {
+    true
+}
+
+fn default_cloud_target_language() -> String {
+    "en".to_string()
+}
+
+fn default_optimize_prompt() -> String {
+    "You are an expert text post-processor for speech transcription.\nFix recognition errors, punctuation, casing, and spacing.\nDo not add new facts. Return only the corrected text.".to_string()
+}
+
+fn default_translate_prompt() -> String {
+    "Translate the input text into {target_language}.\nPreserve meaning and tone. Return only translated text.".to_string()
+}
+
+const fn default_cloud_timeout_ms() -> u64 {
+    10_000
+}
+
+const fn default_cloud_retries() -> u8 {
+    1
+}
+
+impl Default for CloudPipelineConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            optimize_provider_id: String::new(),
+            translate_provider_id: String::new(),
+            target_language: default_cloud_target_language(),
+            optimize_prompt: default_optimize_prompt(),
+            translate_prompt: default_translate_prompt(),
+            timeout_ms: default_cloud_timeout_ms(),
+            max_retries: default_cloud_retries(),
+        }
+    }
+}
+
+impl Default for CloudSettings {
+    fn default() -> Self {
+        Self {
+            providers: Vec::new(),
+            pipeline: CloudPipelineConfig::default(),
+        }
+    }
+}
+
 fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfig, String> {
     if dictation == translation {
         return Err("dictation and translation hotkeys must be different".into());
@@ -501,7 +637,10 @@ fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfi
     })
 }
 
-fn apply_hotkey_shortcuts(app: &AppHandle, new_config: HotkeyConfig) -> Result<HotkeyConfig, String> {
+fn apply_hotkey_shortcuts(
+    app: &AppHandle,
+    new_config: HotkeyConfig,
+) -> Result<HotkeyConfig, String> {
     let state = app.state::<AppState>();
     let old_config = {
         let lock = state
@@ -633,17 +772,464 @@ fn load_persisted_hotkeys(app: &AppHandle) -> Result<Option<PersistedHotkeySetti
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path).map_err(|e| format!("failed to read hotkey settings: {e}"))?;
+    let raw =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read hotkey settings: {e}"))?;
     let parsed = serde_json::from_str::<PersistedHotkeySettings>(&raw)
         .map_err(|e| format!("failed to parse hotkey settings: {e}"))?;
     Ok(Some(parsed))
 }
 
-fn save_persisted_hotkeys(app: &AppHandle, settings: &PersistedHotkeySettings) -> Result<(), String> {
+fn save_persisted_hotkeys(
+    app: &AppHandle,
+    settings: &PersistedHotkeySettings,
+) -> Result<(), String> {
     let path = hotkey_settings_file(app)?;
     let raw = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("failed to serialize hotkey settings: {e}"))?;
     fs::write(path, raw).map_err(|e| format!("failed to write hotkey settings: {e}"))
+}
+
+fn cloud_settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("cloud_settings.json"))
+}
+
+fn validate_cloud_settings(settings: &CloudSettings) -> Result<(), String> {
+    let mut ids = std::collections::HashSet::new();
+    for provider in &settings.providers {
+        let id = provider.id.trim();
+        if id.is_empty() {
+            return Err("provider id cannot be empty".into());
+        }
+        if !ids.insert(id.to_string()) {
+            return Err(format!("duplicate provider id: {id}"));
+        }
+        if provider.enabled && provider.model.trim().is_empty() {
+            return Err(format!("provider {id} model cannot be empty"));
+        }
+        if provider.enabled && provider.vendor != CloudVendor::Ollama && provider.api_key.trim().is_empty() {
+            return Err(format!("provider {id} api key cannot be empty"));
+        }
+    }
+
+    let optimize_id = settings.pipeline.optimize_provider_id.trim();
+    if !optimize_id.is_empty() && !ids.contains(optimize_id) {
+        return Err(format!("optimize provider not found: {optimize_id}"));
+    }
+
+    let translate_id = settings.pipeline.translate_provider_id.trim();
+    if !translate_id.is_empty() && !ids.contains(translate_id) {
+        return Err(format!("translate provider not found: {translate_id}"));
+    }
+
+    if settings.pipeline.target_language.trim().is_empty() {
+        return Err("target language cannot be empty".into());
+    }
+
+    Ok(())
+}
+
+fn load_persisted_cloud_settings(app: &AppHandle) -> Result<Option<CloudSettings>, String> {
+    let path = cloud_settings_file(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw =
+        fs::read_to_string(&path).map_err(|e| format!("failed to read cloud settings: {e}"))?;
+    let parsed = serde_json::from_str::<CloudSettings>(&raw)
+        .map_err(|e| format!("failed to parse cloud settings: {e}"))?;
+    validate_cloud_settings(&parsed)?;
+    Ok(Some(parsed))
+}
+
+fn save_persisted_cloud_settings(app: &AppHandle, settings: &CloudSettings) -> Result<(), String> {
+    validate_cloud_settings(settings)?;
+    let path = cloud_settings_file(app)?;
+    let raw = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("failed to serialize cloud settings: {e}"))?;
+    fs::write(path, raw).map_err(|e| format!("failed to write cloud settings: {e}"))
+}
+
+fn render_prompt_template(template: &str, text: &str, target_language: Option<&str>) -> String {
+    let mut rendered = template.replace("{text}", text);
+    if let Some(lang) = target_language {
+        rendered = rendered.replace("{target_language}", lang);
+    }
+    if !rendered.contains(text) && !template.contains("{text}") {
+        format!("{rendered}\n\nInput:\n{text}")
+    } else {
+        rendered
+    }
+}
+
+async fn prompt_with_provider(
+    provider: &CloudProviderConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Result<String, String> {
+    match provider.vendor {
+        CloudVendor::Openai => {
+            let mut builder: rig::providers::openai::ClientBuilder =
+                rig::providers::openai::Client::builder().api_key(provider.api_key.clone());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::openai::Client = builder
+                .build()
+                .map_err(|e| format!("openai client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("openai prompt failed: {e}"))
+        }
+        CloudVendor::Openrouter => {
+            let mut builder: rig::providers::openrouter::ClientBuilder =
+                rig::providers::openrouter::Client::builder().api_key(provider.api_key.clone());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::openrouter::Client = builder
+                .build()
+                .map_err(|e| format!("openrouter client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("openrouter prompt failed: {e}"))
+        }
+        CloudVendor::Anthropic => {
+            let mut builder: rig::providers::anthropic::ClientBuilder =
+                rig::providers::anthropic::Client::builder().api_key(provider.api_key.clone());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::anthropic::Client = builder
+                .build()
+                .map_err(|e| format!("anthropic client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("anthropic prompt failed: {e}"))
+        }
+        CloudVendor::Gemini => {
+            let mut builder: rig::providers::gemini::client::ClientBuilder =
+                rig::providers::gemini::Client::builder().api_key(provider.api_key.clone());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::gemini::Client = builder
+                .build()
+                .map_err(|e| format!("gemini client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("gemini prompt failed: {e}"))
+        }
+        CloudVendor::Groq => {
+            let mut builder = rig::providers::groq::Client::builder().api_key(provider.api_key.as_str());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::groq::Client = builder
+                .build()
+                .map_err(|e| format!("groq client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("groq prompt failed: {e}"))
+        }
+        CloudVendor::Deepseek => {
+            let mut builder =
+                rig::providers::deepseek::Client::builder().api_key(provider.api_key.as_str());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::deepseek::Client = builder
+                .build()
+                .map_err(|e| format!("deepseek client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("deepseek prompt failed: {e}"))
+        }
+        CloudVendor::Mistral => {
+            let mut builder =
+                rig::providers::mistral::Client::builder().api_key(provider.api_key.as_str());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::mistral::Client = builder
+                .build()
+                .map_err(|e| format!("mistral client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("mistral prompt failed: {e}"))
+        }
+        CloudVendor::Xai => {
+            let mut builder: rig::providers::xai::client::ClientBuilder =
+                rig::providers::xai::Client::builder().api_key(provider.api_key.clone());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::xai::Client = builder
+                .build()
+                .map_err(|e| format!("xai client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("xai prompt failed: {e}"))
+        }
+        CloudVendor::Perplexity => {
+            let mut builder: rig::providers::perplexity::ClientBuilder =
+                rig::providers::perplexity::Client::builder().api_key(provider.api_key.clone());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::perplexity::Client = builder
+                .build()
+                .map_err(|e| format!("perplexity client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("perplexity prompt failed: {e}"))
+        }
+        CloudVendor::Together => {
+            let mut builder: rig::providers::together::client::ClientBuilder =
+                rig::providers::together::Client::builder().api_key(provider.api_key.clone());
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::together::Client = builder
+                .build()
+                .map_err(|e| format!("together client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("together prompt failed: {e}"))
+        }
+        CloudVendor::Ollama => {
+            let mut builder: rig::providers::ollama::ClientBuilder =
+                rig::providers::ollama::Client::builder().api_key(rig::client::Nothing);
+            if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
+                builder = builder.base_url(base_url);
+            }
+            let client: rig::providers::ollama::Client = builder
+                .build()
+                .map_err(|e| format!("ollama client init failed: {e}"))?;
+            let agent = client
+                .agent(provider.model.clone())
+                .preamble(system_prompt)
+                .build();
+            agent
+                .prompt(user_prompt)
+                .await
+                .map_err(|e| format!("ollama prompt failed: {e}"))
+        }
+    }
+}
+
+fn call_provider_with_retry(
+    provider: &CloudProviderConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+    max_retries: u8,
+) -> Result<String, String> {
+    let mut last_err = String::new();
+    for attempt in 0..=max_retries {
+        match tauri::async_runtime::block_on(prompt_with_provider(
+            provider,
+            system_prompt,
+            user_prompt,
+        )) {
+            Ok(v) => return Ok(v.trim().to_string()),
+            Err(err) => {
+                last_err = err;
+                eprintln!(
+                    "[typemore][cloud] provider={} attempt={} failed: {}",
+                    provider.id,
+                    attempt + 1,
+                    last_err
+                );
+            }
+        }
+    }
+    Err(last_err)
+}
+
+fn resolve_provider<'a>(
+    settings: &'a CloudSettings,
+    provider_id: &str,
+) -> Option<&'a CloudProviderConfig> {
+    if provider_id.is_empty() {
+        return None;
+    }
+    settings
+        .providers
+        .iter()
+        .find(|p| p.enabled && p.id == provider_id)
+}
+
+fn run_cloud_pipeline(
+    app: &AppHandle,
+    source_text: &str,
+    translate: bool,
+    target_lang_override: Option<String>,
+) -> CloudProcessResult {
+    let source = source_text.trim();
+    if source.is_empty() {
+        return CloudProcessResult {
+            final_text: String::new(),
+            stage: "local".into(),
+            warnings: Vec::new(),
+        };
+    }
+
+    let settings = app
+        .state::<AppState>()
+        .cloud_settings
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default();
+
+    if !settings.pipeline.enabled {
+        return CloudProcessResult {
+            final_text: source.to_string(),
+            stage: "local".into(),
+            warnings: Vec::new(),
+        };
+    }
+
+    let optimize_provider =
+        match resolve_provider(&settings, settings.pipeline.optimize_provider_id.trim()) {
+            Some(v) => v,
+            None => {
+                return CloudProcessResult {
+                    final_text: source.to_string(),
+                    stage: "local".into(),
+                    warnings: vec!["optimize provider not configured or disabled".into()],
+                }
+            }
+        };
+
+    let optimize_user = render_prompt_template(&settings.pipeline.optimize_prompt, source, None);
+    let optimized = match call_provider_with_retry(
+        optimize_provider,
+        "You improve speech transcription text and return plain text only.",
+        &optimize_user,
+        settings.pipeline.max_retries,
+    ) {
+        Ok(text) if !text.trim().is_empty() => text,
+        Ok(_) => source.to_string(),
+        Err(err) => {
+            return CloudProcessResult {
+                final_text: source.to_string(),
+                stage: "local".into(),
+                warnings: vec![format!("optimize failed: {err}")],
+            }
+        }
+    };
+
+    if !translate {
+        return CloudProcessResult {
+            final_text: optimized,
+            stage: "optimized".into(),
+            warnings: Vec::new(),
+        };
+    }
+
+    let target = target_lang_override
+        .unwrap_or_else(|| settings.pipeline.target_language.clone())
+        .trim()
+        .to_string();
+    if target.is_empty() {
+        return CloudProcessResult {
+            final_text: optimized,
+            stage: "optimized".into(),
+            warnings: vec!["target language is empty".into()],
+        };
+    }
+
+    let translate_provider = if settings.pipeline.translate_provider_id.trim().is_empty() {
+        optimize_provider
+    } else {
+        match resolve_provider(&settings, settings.pipeline.translate_provider_id.trim()) {
+            Some(v) => v,
+            None => {
+                return CloudProcessResult {
+                    final_text: optimized,
+                    stage: "optimized".into(),
+                    warnings: vec!["translate provider not configured or disabled".into()],
+                };
+            }
+        }
+    };
+
+    let translate_user = render_prompt_template(
+        &settings.pipeline.translate_prompt,
+        &optimized,
+        Some(target.as_str()),
+    );
+    match call_provider_with_retry(
+        translate_provider,
+        "You are a professional translator. Return translated plain text only.",
+        &translate_user,
+        settings.pipeline.max_retries,
+    ) {
+        Ok(translated) if !translated.trim().is_empty() => CloudProcessResult {
+            final_text: translated,
+            stage: "translated".into(),
+            warnings: Vec::new(),
+        },
+        Ok(_) => CloudProcessResult {
+            final_text: optimized,
+            stage: "optimized".into(),
+            warnings: vec!["translation returned empty response".into()],
+        },
+        Err(err) => CloudProcessResult {
+            final_text: optimized,
+            stage: "optimized".into(),
+            warnings: vec![format!("translate failed: {err}")],
+        },
+    }
 }
 
 fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -903,9 +1489,8 @@ fn download_file_with_progress(
         let message = if let Some(all) = total {
             let p = (downloaded as f32 / all as f32).clamp(0.0, 1.0);
             // Throttle progress events to avoid UI flicker from overly frequent updates.
-            let should_emit = p >= 1.0
-                || (p - last_ratio) >= 0.003
-                || last_emit.elapsed().as_millis() >= 120;
+            let should_emit =
+                p >= 1.0 || (p - last_ratio) >= 0.003 || last_emit.elapsed().as_millis() >= 120;
             if should_emit {
                 on_progress(
                     80.0 * p,
@@ -931,7 +1516,10 @@ fn download_file_with_progress(
             continue;
         } else {
             if current_ui_language(app) == UiLanguage::En {
-                format!("Downloading model... {:.1} MB", downloaded as f32 / 1_048_576.0)
+                format!(
+                    "Downloading model... {:.1} MB",
+                    downloaded as f32 / 1_048_576.0
+                )
             } else {
                 format!("下载模型中... {:.1} MB", downloaded as f32 / 1_048_576.0)
             }
@@ -991,7 +1579,12 @@ fn run_model_init_job(app: &AppHandle) -> Result<(), String> {
                 },
             );
         };
-        download_file_with_progress(app, MODEL_ARCHIVE_URL, &archive_path, &mut progress_callback)?;
+        download_file_with_progress(
+            app,
+            MODEL_ARCHIVE_URL,
+            &archive_path,
+            &mut progress_callback,
+        )?;
     } else {
         set_init_status(
             app,
@@ -1219,8 +1812,8 @@ fn encode_wav_i16_mono(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, Str
         sample_format: hound::SampleFormat::Int,
     };
     {
-        let mut writer =
-            hound::WavWriter::new(&mut cursor, spec).map_err(|e| format!("wav init failed: {e}"))?;
+        let mut writer = hound::WavWriter::new(&mut cursor, spec)
+            .map_err(|e| format!("wav init failed: {e}"))?;
         for sample in samples {
             let clamped = sample.clamp(-1.0, 1.0);
             let v = (clamped * i16::MAX as f32).round() as i16;
@@ -1265,7 +1858,11 @@ fn infer_translation_target(text: &str) -> &'static str {
             || ('\u{3400}'..='\u{9fff}').contains(&ch)
             || ('\u{f900}'..='\u{faff}').contains(&ch)
     });
-    if has_cjk { "en" } else { "zh-CN" }
+    if has_cjk {
+        "en"
+    } else {
+        "zh-CN"
+    }
 }
 
 fn resolve_translation_target(app: &AppHandle, text: &str) -> &'static str {
@@ -1376,7 +1973,11 @@ fn init_model(app: AppHandle) -> Result<ModelInitStatus, String> {
                     running: false,
                     phase: "error".into(),
                     progress: 0.0,
-                    message: localize_text(&app_handle, "模型初始化失败", "Model initialization failed"),
+                    message: localize_text(
+                        &app_handle,
+                        "模型初始化失败",
+                        "Model initialization failed",
+                    ),
                     ready: false,
                     error: Some(err),
                 },
@@ -1482,65 +2083,6 @@ fn save_recording_and_transcribe(
     Ok(SaveAndTranscribeResult { recording, text })
 }
 
-fn extract_google_translate_text(value: &serde_json::Value) -> Option<String> {
-    let segments = value.get(0)?.as_array()?;
-    let mut out = String::new();
-    for seg in segments {
-        if let Some(part) = seg.get(0).and_then(|v| v.as_str()) {
-            out.push_str(part);
-        }
-    }
-    let trimmed = out.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-#[tauri::command]
-fn translate_text_best_effort(text: String, target_lang: Option<String>) -> Result<String, String> {
-    let input = text.trim();
-    if input.is_empty() {
-        return Ok(String::new());
-    }
-    let target = target_lang
-        .unwrap_or_else(|| "en".to_string())
-        .trim()
-        .to_string();
-    if target.is_empty() {
-        return Err("target language cannot be empty".into());
-    }
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-        .map_err(|e| format!("failed to build translate client: {e}"))?;
-    let response = client
-        .get("https://translate.googleapis.com/translate_a/single")
-        .query(&[
-            ("client", "gtx"),
-            ("sl", "auto"),
-            ("tl", target.as_str()),
-            ("dt", "t"),
-            ("q", input),
-        ])
-        .send()
-        .map_err(|e| format!("translation request failed: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "translation request failed with status {}",
-            response.status()
-        ));
-    }
-    let raw = response
-        .text()
-        .map_err(|e| format!("failed to read translation response: {e}"))?;
-    let json: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("failed to parse translation response: {e}"))?;
-    extract_google_translate_text(&json).ok_or_else(|| "translation response was empty".into())
-}
-
 #[tauri::command]
 fn open_temp_dir(app: AppHandle) -> Result<String, String> {
     let dir = temp_dir(&app)?;
@@ -1583,11 +2125,14 @@ fn macos_is_accessibility_trusted() -> bool {
 
 #[cfg(target_os = "macos")]
 fn macos_request_accessibility_permission() -> bool {
-    use core_foundation::{base::TCFType, boolean::CFBoolean, dictionary::CFDictionary, string::CFString};
+    use core_foundation::{
+        base::TCFType, boolean::CFBoolean, dictionary::CFDictionary, string::CFString,
+    };
 
     let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
     let prompt_true = CFBoolean::true_value();
-    let options = CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_true.as_CFType())]);
+    let options =
+        CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_true.as_CFType())]);
 
     // SAFETY: AXIsProcessTrustedWithOptions reads the provided CFDictionary options.
     unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as *const c_void) }
@@ -1613,7 +2158,11 @@ fn get_accessibility_status() -> AccessibilityStatus {
     } else {
         None
     };
-    let trusted = if cfg!(target_os = "macos") { ax_trusted } else { false };
+    let trusted = if cfg!(target_os = "macos") {
+        ax_trusted
+    } else {
+        false
+    };
     AccessibilityStatus {
         supported: cfg!(target_os = "macos"),
         trusted,
@@ -1640,7 +2189,11 @@ fn request_accessibility_permission() -> AccessibilityStatus {
     } else {
         None
     };
-    let trusted = if cfg!(target_os = "macos") { ax_trusted } else { false };
+    let trusted = if cfg!(target_os = "macos") {
+        ax_trusted
+    } else {
+        false
+    };
     AccessibilityStatus {
         supported: cfg!(target_os = "macos"),
         trusted,
@@ -1706,7 +2259,11 @@ fn pbcopy_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn type_text_via_paste(text: &str, keep_result_in_clipboard: bool, do_paste: bool) -> Result<(), String> {
+fn type_text_via_paste(
+    text: &str,
+    keep_result_in_clipboard: bool,
+    do_paste: bool,
+) -> Result<(), String> {
     let previous_clipboard = Command::new("pbpaste")
         .output()
         .ok()
@@ -1781,7 +2338,10 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
 }
 
 fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Result<(), String> {
-    let _ = overlay.set_size(Size::Logical(LogicalSize::new(OVERLAY_WIDTH, OVERLAY_HEIGHT)));
+    let _ = overlay.set_size(Size::Logical(LogicalSize::new(
+        OVERLAY_WIDTH,
+        OVERLAY_HEIGHT,
+    )));
     let overlay_position = app
         .state::<AppState>()
         .overlay_position
@@ -1960,6 +2520,80 @@ fn set_ui_language(app: AppHandle, language: String) -> Result<HotkeySettings, S
 }
 
 #[tauri::command]
+fn get_cloud_settings(app: AppHandle) -> Result<CloudSettings, String> {
+    app.state::<AppState>()
+        .cloud_settings
+        .lock()
+        .map(|v| v.clone())
+        .map_err(|_| "failed to read cloud settings".to_string())
+}
+
+#[tauri::command]
+fn set_cloud_settings(app: AppHandle, settings: CloudSettings) -> Result<CloudSettings, String> {
+    validate_cloud_settings(&settings)?;
+    {
+        let state = app.state::<AppState>();
+        let mut lock = state
+            .cloud_settings
+            .lock()
+            .map_err(|_| "failed to update cloud settings".to_string())?;
+        *lock = settings.clone();
+    }
+    save_persisted_cloud_settings(&app, &settings)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+fn test_cloud_provider(
+    app: AppHandle,
+    input: TestCloudProviderInput,
+) -> Result<TestCloudProviderResult, String> {
+    let settings = app
+        .state::<AppState>()
+        .cloud_settings
+        .lock()
+        .map(|v| v.clone())
+        .map_err(|_| "failed to read cloud settings".to_string())?;
+    let provider = settings
+        .providers
+        .iter()
+        .find(|p| p.id == input.provider_id)
+        .ok_or_else(|| "provider not found".to_string())?;
+    if !provider.enabled {
+        return Ok(TestCloudProviderResult {
+            ok: false,
+            message: "provider is disabled".into(),
+        });
+    }
+    let response = call_provider_with_retry(
+        provider,
+        "Reply with exactly: OK",
+        "Health check ping",
+        settings.pipeline.max_retries,
+    );
+    match response {
+        Ok(_) => Ok(TestCloudProviderResult {
+            ok: true,
+            message: "connection ok".into(),
+        }),
+        Err(err) => Ok(TestCloudProviderResult {
+            ok: false,
+            message: err,
+        }),
+    }
+}
+
+#[tauri::command]
+fn process_text_with_cloud(
+    app: AppHandle,
+    text: String,
+    translate: bool,
+    target_lang: Option<String>,
+) -> Result<CloudProcessResult, String> {
+    Ok(run_cloud_pipeline(&app, &text, translate, target_lang))
+}
+
+#[tauri::command]
 fn set_overlay_state(app: AppHandle, phase: String, text: Option<String>) -> Result<(), String> {
     emit_overlay_state(&app, &phase, text, None)
 }
@@ -2072,7 +2706,11 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         let _ = emit_overlay_state(
                             &app_handle,
                             "ready",
-                            Some(localize_text(&app_handle, "未检测到语音", "No speech detected")),
+                            Some(localize_text(
+                                &app_handle,
+                                "未检测到语音",
+                                "No speech detected",
+                            )),
                             None,
                         );
                         reset_native_session_to_idle(&app_handle);
@@ -2128,18 +2766,32 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         channels,
                         transcribe_started.elapsed().as_millis()
                     );
-                    if action == "toggle-translation" {
-                        let translate_started = Instant::now();
-                        let target = resolve_translation_target(&app_handle, &text).to_string();
-                        if let Ok(translated) = translate_text_best_effort(text.clone(), Some(target)) {
-                            text = translated;
+                    let cloud_started = Instant::now();
+                    let cloud_result = run_cloud_pipeline(
+                        &app_handle,
+                        &text,
+                        action == "toggle-translation",
+                        if action == "toggle-translation" {
+                            Some(resolve_translation_target(&app_handle, &text).to_string())
+                        } else {
+                            None
+                        },
+                    );
+                    if !cloud_result.warnings.is_empty() {
+                        for warning in &cloud_result.warnings {
+                            eprintln!(
+                                "[typemore][cloud] warning action={} msg={}",
+                                action, warning
+                            );
                         }
-                        eprintln!(
-                            "[typemore][recorder] translation done action={} elapsed_ms={}",
-                            action,
-                            translate_started.elapsed().as_millis()
-                        );
                     }
+                    text = cloud_result.final_text;
+                    eprintln!(
+                        "[typemore][cloud] done action={} stage={} elapsed_ms={}",
+                        action,
+                        cloud_result.stage,
+                        cloud_started.elapsed().as_millis()
+                    );
 
                     if let Ok(wav_data) = encode_wav_i16_mono(&mono, sample_rate) {
                         let prefix = if action == "toggle-translation" {
@@ -2221,7 +2873,14 @@ fn spawn_native_recorder_watchdog(app: &AppHandle) {
             .native_hotkey_session
             .lock()
             .ok()
-            .map(|s| (s.state, s.state_since, s.recording_started_at, s.active_action.clone()));
+            .map(|s| {
+                (
+                    s.state,
+                    s.state_since,
+                    s.recording_started_at,
+                    s.active_action.clone(),
+                )
+            });
         let Some((state, state_since, recording_started_at, action)) = snapshot else {
             continue;
         };
@@ -2437,6 +3096,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let persisted = load_persisted_hotkeys(app.handle())?;
+            let persisted_cloud = load_persisted_cloud_settings(app.handle()).unwrap_or_else(|err| {
+                eprintln!("[typemore] failed to load cloud settings: {}", err);
+                None
+            });
             let fn_enabled = persisted
                 .as_ref()
                 .map(|saved| saved.fn_enabled)
@@ -2510,7 +3173,13 @@ pub fn run() {
             if let Ok(mut lock) = app.state::<AppState>().ui_language.lock() {
                 *lock = ui_language;
             }
+            if let Ok(mut lock) = app.state::<AppState>().cloud_settings.lock() {
+                *lock = persisted_cloud.unwrap_or_default();
+            }
             let _ = save_current_hotkey_settings(app.handle());
+            if let Ok(current_cloud) = app.state::<AppState>().cloud_settings.lock() {
+                let _ = save_persisted_cloud_settings(app.handle(), &current_cloud.clone());
+            }
             eprintln!("[typemore] fn key enabled: {}", fn_enabled);
             eprintln!("[typemore] ui language: {:?}", ui_language);
 
@@ -2561,7 +3230,6 @@ pub fn run() {
             get_recording_cached_transcript,
             transcribe_recording,
             save_recording_and_transcribe,
-            translate_text_best_effort,
             open_temp_dir,
             get_accessibility_status,
             request_accessibility_permission,
@@ -2571,6 +3239,10 @@ pub fn run() {
             set_global_shortcuts,
             set_fn_key_enabled,
             set_ui_language,
+            get_cloud_settings,
+            set_cloud_settings,
+            test_cloud_provider,
+            process_text_with_cloud,
             set_overlay_state,
             set_overlay_level,
             hide_overlay
