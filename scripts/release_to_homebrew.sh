@@ -8,7 +8,7 @@ TAP_DIR="$TMP_DIR/homebrew-tap"
 VERSION_FILES=("package.json" "src-tauri/Cargo.toml" "src-tauri/tauri.conf.json")
 SKIP_BUMP="${SKIP_BUMP:-0}"
 BUILD_DIR="${BUILD_DIR:-$REPO_DIR/build}"
-TAP_REPO="${TAP_REPO:-}"
+TAP_REPO="${TAP_REPO:-everettjf/homebrew-tap}"
 FORMULA_PATH="${FORMULA_PATH:-}"
 ASSET_PATH="${ASSET_PATH:-}"
 
