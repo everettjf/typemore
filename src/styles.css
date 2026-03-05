@@ -30,6 +30,12 @@ body {
     linear-gradient(145deg, var(--tm-bg-1) 0%, var(--tm-bg-2) 48%, var(--tm-bg-3) 100%);
 }
 
+html.overlay-mode,
+body.overlay-mode,
+#root.overlay-mode {
+  background: transparent !important;
+}
+
 .typemore-app {
   position: relative;
 }

@@ -30,8 +30,9 @@ const TRANSCRIPT_CACHE_FILE: &str = "transcript_cache.json";
 const INIT_EVENT: &str = "model-init-progress";
 const HOTKEY_EVENT: &str = "global-shortcut-triggered";
 const OVERLAY_EVENT: &str = "overlay-state";
-const HOTKEY_TOGGLE_DICTATION: &str = "CommandOrControl+Alt+Space";
-const HOTKEY_TOGGLE_TRANSLATION: &str = "CommandOrControl+Alt+Enter";
+const RECORDING_SAVED_EVENT: &str = "recording-saved";
+const HOTKEY_TOGGLE_DICTATION: &str = "";
+const HOTKEY_TOGGLE_TRANSLATION: &str = "";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 210.0;
 const OVERLAY_HEIGHT: f64 = 25.0;
@@ -200,9 +201,9 @@ struct AppState {
 #[derive(Debug, Clone)]
 struct HotkeyConfig {
     dictation: String,
-    dictation_id: u32,
+    dictation_id: Option<u32>,
     translation: String,
-    translation_id: u32,
+    translation_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -462,6 +463,13 @@ fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str)
     );
 }
 
+fn emit_recording_saved_event(app: &AppHandle, recording: &RecordingItem) {
+    let payload = serde_json::json!({
+        "recording": recording,
+    });
+    let _ = app.emit(RECORDING_SAVED_EVENT, payload);
+}
+
 fn current_ui_language(app: &AppHandle) -> UiLanguage {
     app.state::<AppState>()
         .ui_language
@@ -618,22 +626,40 @@ impl Default for CloudSettings {
 }
 
 fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfig, String> {
-    if dictation == translation {
+    let dictation = dictation.trim();
+    let translation = translation.trim();
+
+    let dictation_set = !dictation.is_empty();
+    let translation_set = !translation.is_empty();
+    if dictation_set != translation_set {
+        return Err("dictation and translation hotkeys must both be set or both empty".into());
+    }
+    if dictation_set && dictation == translation {
         return Err("dictation and translation hotkeys must be different".into());
     }
 
-    let dictation_shortcut: tauri_plugin_global_shortcut::Shortcut = dictation
-        .parse()
-        .map_err(|e| format!("invalid dictation shortcut: {e}"))?;
-    let translation_shortcut: tauri_plugin_global_shortcut::Shortcut = translation
-        .parse()
-        .map_err(|e| format!("invalid translation shortcut: {e}"))?;
+    let dictation_id = if dictation_set {
+        let dictation_shortcut: tauri_plugin_global_shortcut::Shortcut = dictation
+            .parse()
+            .map_err(|e| format!("invalid dictation shortcut: {e}"))?;
+        Some(dictation_shortcut.id())
+    } else {
+        None
+    };
+    let translation_id = if translation_set {
+        let translation_shortcut: tauri_plugin_global_shortcut::Shortcut = translation
+            .parse()
+            .map_err(|e| format!("invalid translation shortcut: {e}"))?;
+        Some(translation_shortcut.id())
+    } else {
+        None
+    };
 
     Ok(HotkeyConfig {
         dictation: dictation.to_string(),
-        dictation_id: dictation_shortcut.id(),
+        dictation_id,
         translation: translation.to_string(),
-        translation_id: translation_shortcut.id(),
+        translation_id,
     })
 }
 
@@ -651,14 +677,16 @@ fn apply_hotkey_shortcuts(
     };
 
     let manager = app.global_shortcut();
-    if old_config.dictation != new_config.dictation
+    if !old_config.dictation.is_empty()
+        && old_config.dictation != new_config.dictation
         && manager.is_registered(old_config.dictation.as_str())
     {
         manager
             .unregister(old_config.dictation.as_str())
             .map_err(|e| format!("failed to unregister old dictation shortcut: {e}"))?;
     }
-    if old_config.translation != new_config.translation
+    if !old_config.translation.is_empty()
+        && old_config.translation != new_config.translation
         && manager.is_registered(old_config.translation.as_str())
     {
         manager
@@ -666,12 +694,13 @@ fn apply_hotkey_shortcuts(
             .map_err(|e| format!("failed to unregister old translation shortcut: {e}"))?;
     }
 
-    if !manager.is_registered(new_config.dictation.as_str()) {
+    if !new_config.dictation.is_empty() && !manager.is_registered(new_config.dictation.as_str()) {
         manager
             .register(new_config.dictation.as_str())
             .map_err(|e| format!("failed to register dictation shortcut: {e}"))?;
     }
-    if !manager.is_registered(new_config.translation.as_str()) {
+    if !new_config.translation.is_empty() && !manager.is_registered(new_config.translation.as_str())
+    {
         manager
             .register(new_config.translation.as_str())
             .map_err(|e| format!("failed to register translation shortcut: {e}"))?;
@@ -806,7 +835,10 @@ fn validate_cloud_settings(settings: &CloudSettings) -> Result<(), String> {
         if provider.enabled && provider.model.trim().is_empty() {
             return Err(format!("provider {id} model cannot be empty"));
         }
-        if provider.enabled && provider.vendor != CloudVendor::Ollama && provider.api_key.trim().is_empty() {
+        if provider.enabled
+            && provider.vendor != CloudVendor::Ollama
+            && provider.api_key.trim().is_empty()
+        {
             return Err(format!("provider {id} api key cannot be empty"));
         }
     }
@@ -940,7 +972,8 @@ async fn prompt_with_provider(
                 .map_err(|e| format!("gemini prompt failed: {e}"))
         }
         CloudVendor::Groq => {
-            let mut builder = rig::providers::groq::Client::builder().api_key(provider.api_key.as_str());
+            let mut builder =
+                rig::providers::groq::Client::builder().api_key(provider.api_key.as_str());
             if let Some(base_url) = provider.base_url.as_ref().filter(|v| !v.trim().is_empty()) {
                 builder = builder.base_url(base_url);
             }
@@ -1849,6 +1882,7 @@ fn persist_recording_with_text(
     let recording =
         to_recording_item(&path).ok_or_else(|| "failed to build recording metadata".to_string())?;
     put_cached_transcript(app, &recording.id, text)?;
+    emit_recording_saved_event(app, &recording);
     Ok(())
 }
 
@@ -2079,6 +2113,7 @@ fn save_recording_and_transcribe(
     let recording =
         to_recording_item(&path).ok_or_else(|| "failed to build recording metadata".to_string())?;
     put_cached_transcript(&app, &recording.id, &text)?;
+    emit_recording_saved_event(&app, &recording);
 
     Ok(SaveAndTranscribeResult { recording, text })
 }
@@ -2276,6 +2311,9 @@ fn type_text_via_paste(
     }
 
     if !keep_result_in_clipboard {
+        if do_paste {
+            std::thread::sleep(Duration::from_millis(180));
+        }
         if let Some(prev) = previous_clipboard {
             let _ = pbcopy_text(&prev);
         } else {
@@ -3075,9 +3113,9 @@ pub fn run() {
                     let Ok(lock) = state_ref.hotkeys.lock() else {
                         return;
                     };
-                    let action = if shortcut.id() == lock.dictation_id {
+                    let action = if lock.dictation_id.is_some_and(|id| shortcut.id() == id) {
                         "toggle-dictation"
-                    } else if shortcut.id() == lock.translation_id {
+                    } else if lock.translation_id.is_some_and(|id| shortcut.id() == id) {
                         "toggle-translation"
                     } else {
                         return;

@@ -101,6 +101,10 @@ type OverlayStatePayload = {
   level?: number | null;
 };
 
+type RecordingSavedPayload = {
+  recording: RecordingItem;
+};
+
 type CloudProviderConfig = {
   id: string;
   name: string;
@@ -141,8 +145,8 @@ type TestCloudProviderResult = {
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
-const DEFAULT_HOTKEY_DICTATION = "CommandOrControl+Alt+Space";
-const DEFAULT_HOTKEY_TRANSLATION = "CommandOrControl+Alt+Enter";
+const DEFAULT_HOTKEY_DICTATION = "";
+const DEFAULT_HOTKEY_TRANSLATION = "";
 const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
 const DEFAULT_OVERLAY_POSITION: OverlayPosition = "bottom";
 const DEFAULT_OUTPUT_MODE: OutputMode = "auto-paste";
@@ -213,6 +217,7 @@ const I18N = {
     noRecordings: "还没有录音记录，先初始化模型并开始录音。",
     countItems: "{count} 条",
     historyTitle: "历史",
+    historyRefresh: "刷新",
     rename: "重命名",
     delete: "删除",
     retranscribe: "重新识别",
@@ -240,6 +245,7 @@ const I18N = {
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
     settingsHotkeyTitle: "全局快捷键",
     settingsHotkeyDesc: "支持点按切换（按一次开始/停止）和长按模式（按下开始、松开停止）。",
+    settingsHotkeyBuiltInHint: "留空可关闭内置快捷键（仅使用 Fn 快捷键）。如需启用，请同时设置听写与翻译两个快捷键。",
     settingsHotkeyDictation: "听写快捷键",
     settingsHotkeyTranslation: "翻译快捷键",
     settingsFnKeyToggle: "启用 Fn 单键切换录音（macOS）",
@@ -263,6 +269,7 @@ const I18N = {
     settingsHotkeyConflictSame: "听写快捷键与翻译快捷键不能相同。",
     settingsHotkeyConflictWithSystem: "与系统常用快捷键冲突：{value}",
     settingsHotkeyWarningSaveBlocked: "请先修复冲突再保存。",
+    settingsHotkeyRequirePair: "内置快捷键需同时设置听写和翻译，或两个都留空。",
     settingsTranslationTarget: "翻译目标语言",
     settingsTranslationTargetAuto: "自动（中英互转）",
     settingsTranslationTargetEn: "英文",
@@ -361,6 +368,7 @@ const I18N = {
     noRecordings: "No recordings yet. Initialize the model and start recording.",
     countItems: "{count} items",
     historyTitle: "History",
+    historyRefresh: "Refresh",
     rename: "Rename",
     delete: "Delete",
     retranscribe: "Retranscribe",
@@ -388,6 +396,7 @@ const I18N = {
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
     settingsHotkeyTitle: "Global Hotkey",
     settingsHotkeyDesc: "Supports tap-toggle and long-press mode (press to start, release to stop).",
+    settingsHotkeyBuiltInHint: "Leave empty to disable built-in shortcuts and use Fn only. To enable built-in shortcuts, set both dictation and translation.",
     settingsHotkeyDictation: "Dictation hotkey",
     settingsHotkeyTranslation: "Translation hotkey",
     settingsFnKeyToggle: "Enable Fn one-key dictation toggle (macOS)",
@@ -411,6 +420,7 @@ const I18N = {
     settingsHotkeyConflictSame: "Dictation and translation hotkeys must be different.",
     settingsHotkeyConflictWithSystem: "Conflicts with common system shortcut: {value}",
     settingsHotkeyWarningSaveBlocked: "Resolve conflicts before saving.",
+    settingsHotkeyRequirePair: "Built-in shortcuts require both dictation and translation, or leave both empty.",
     settingsTranslationTarget: "Translation target",
     settingsTranslationTargetAuto: "Auto (ZH <-> EN)",
     settingsTranslationTargetEn: "English",
@@ -600,6 +610,9 @@ function OverlayWindowApp() {
   const [uiLang, setUiLang] = useState<UiLang>(() => resolveUiLangFromLocalSetting());
 
   useEffect(() => {
+    document.documentElement.classList.add("overlay-mode");
+    document.body.classList.add("overlay-mode");
+    document.getElementById("root")?.classList.add("overlay-mode");
     let unlisten: (() => void) | undefined;
     listen<OverlayStatePayload>("overlay-state", (event) => {
       const nextUiLang = resolveUiLangFromLocalSetting();
@@ -614,6 +627,9 @@ function OverlayWindowApp() {
       if (unlisten) {
         unlisten();
       }
+      document.documentElement.classList.remove("overlay-mode");
+      document.body.classList.remove("overlay-mode");
+      document.getElementById("root")?.classList.remove("overlay-mode");
     };
   }, []);
 
@@ -794,6 +810,9 @@ function MainApp() {
   }
 
   function findSystemHotkeyConflict(value: string): string | null {
+    if (!value.trim()) {
+      return null;
+    }
     const knownConflicts = [
       "CommandOrControl+Space",
       "CommandOrControl+Tab",
@@ -848,7 +867,10 @@ function MainApp() {
     [hotkeyTranslation]
   );
   const hasDuplicateHotkeys = useMemo(
-    () => canonicalHotkey(hotkeyDictation) === canonicalHotkey(hotkeyTranslation),
+    () =>
+      Boolean(hotkeyDictation.trim()) &&
+      Boolean(hotkeyTranslation.trim()) &&
+      canonicalHotkey(hotkeyDictation) === canonicalHotkey(hotkeyTranslation),
     [hotkeyDictation, hotkeyTranslation]
   );
   const hasHotkeyConflicts = Boolean(dictationSystemConflict || translationSystemConflict || hasDuplicateHotkeys);
@@ -941,7 +963,12 @@ function MainApp() {
   async function loadRecordings() {
     const items = await invoke<RecordingItem[]>("list_recordings");
     setRecordings(items);
-    setSelectedId((prev) => prev ?? (items.length > 0 ? items[0].id : null));
+    setSelectedId((prev) => {
+      if (!prev) {
+        return items.length > 0 ? items[0].id : null;
+      }
+      return items.some((item) => item.id === prev) ? prev : (items.length > 0 ? items[0].id : null);
+    });
   }
 
   async function loadInitStatus() {
@@ -1027,6 +1054,7 @@ function MainApp() {
 
     let unlistenInit: (() => void) | undefined;
     let unlistenHotkey: (() => void) | undefined;
+    let unlistenRecordingSaved: (() => void) | undefined;
 
     listen<ModelInitStatus>("model-init-progress", (event) => {
       setInitStatus(event.payload);
@@ -1051,6 +1079,14 @@ function MainApp() {
         setTranscript(t("transcriptListenFailed", { error: String(err) }));
       });
 
+    listen<RecordingSavedPayload>("recording-saved", () => {
+      void loadRecordings();
+    })
+      .then((fn) => {
+        unlistenRecordingSaved = fn;
+      })
+      .catch(() => {});
+
     return () => {
       if (unlistenInit) {
         unlistenInit();
@@ -1058,18 +1094,20 @@ function MainApp() {
       if (unlistenHotkey) {
         unlistenHotkey();
       }
+      if (unlistenRecordingSaved) {
+        unlistenRecordingSaved();
+      }
     };
   }, [t]);
 
   useEffect(() => {
     if (!selectedId) {
+      setTranscript("");
       return;
     }
     invoke<string | null>("get_recording_cached_transcript", { id: selectedId })
       .then((cachedText) => {
-        if (cachedText && cachedText.length > 0) {
-          setTranscript(cachedText);
-        }
+        setTranscript(cachedText ?? "");
       })
       .catch(() => {});
   }, [selectedId]);
@@ -1468,7 +1506,12 @@ function MainApp() {
   async function onSaveHotkeys() {
     const dictation = hotkeyDictation.trim();
     const translation = hotkeyTranslation.trim();
-    if (!dictation || !translation || hasHotkeyConflicts) {
+    const hasOnlyOne = Boolean(dictation) !== Boolean(translation);
+    if (hasOnlyOne) {
+      setTranscript(t("settingsHotkeyRequirePair"));
+      return;
+    }
+    if (hasHotkeyConflicts) {
       if (hasHotkeyConflicts) {
         setTranscript(t("settingsHotkeyWarningSaveBlocked"));
       }
@@ -1882,8 +1925,8 @@ function MainApp() {
                   </div>
 
                   <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600">
-                    <div>{t("settingsHotkeyDictation")}: <span className="font-semibold text-slate-800">{hotkeyDictation}</span></div>
-                    <div className="mt-1">{t("settingsHotkeyTranslation")}: <span className="font-semibold text-slate-800">{hotkeyTranslation}</span></div>
+                    <div>{t("settingsHotkeyDictation")}: <span className="font-semibold text-slate-800">{hotkeyDictation || "-"}</span></div>
+                    <div className="mt-1">{t("settingsHotkeyTranslation")}: <span className="font-semibold text-slate-800">{hotkeyTranslation || "-"}</span></div>
                     <div className="mt-1">{t("settingsTriggerMode")}: <span className="font-semibold text-slate-800">{triggerMode === "tap" ? t("settingsTriggerModeTap") : t("settingsTriggerModeLongPress")}</span></div>
                     <div className="mt-1">{t("settingsOutputMode")}: <span className="font-semibold text-slate-800">{outputMode === "auto-paste" ? t("settingsOutputModeAutoPaste") : outputMode === "paste-and-keep" ? t("settingsOutputModePasteAndKeep") : t("settingsOutputModeCopyOnly")}</span></div>
                   </div>
@@ -1953,23 +1996,40 @@ function MainApp() {
               <Card className="flex min-h-0 flex-col overflow-hidden">
                 <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
                   <div className="text-lg font-semibold">{t("historyTitle")}</div>
-                  <div className="text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
+                  <div className="inline-flex items-center gap-2">
+                    <div className="text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
+                    <Button
+                      variant="outline"
+                      className="h-7 w-7 justify-center p-0"
+                      onClick={() => {
+                        void loadRecordings();
+                      }}
+                      title={t("historyRefresh")}
+                    >
+                      <RefreshCcw size={13} />
+                    </Button>
+                  </div>
                 </div>
 
                 <ScrollArea className="min-h-0 flex-1" viewportClassName="h-full w-full p-3">
                   <ul className="space-y-2">
                     {recordings.map((item) => (
-                      <li key={item.id} className="relative">
+                      <li key={item.id} className="group relative">
                         <div
                           role="button"
                           tabIndex={0}
                           className={cn(
-                            "rounded-xl border px-3 py-2 transition",
+                            "rounded-xl border px-3 py-1.5 transition",
                             selectedId === item.id ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"
                           )}
                           onClick={() => {
                             setSelectedId(item.id);
                             setHistoryMenuId(null);
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            setSelectedId(item.id);
+                            setHistoryMenuId(item.id);
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
@@ -1984,20 +2044,20 @@ function MainApp() {
                               <div className="line-clamp-2 text-sm font-medium leading-5 text-slate-800">{item.name}</div>
                               <div className="mt-1 text-xs text-slate-500">{formatListTime(item.createdAtMs)}</div>
                             </div>
-                            <div className="relative" data-history-menu>
+                            <div className="relative self-center" data-history-menu>
                               <Button
                                 variant="outline"
-                                className="h-8 w-8 justify-center p-0"
+                                className="h-6 w-6 justify-center p-0 opacity-0 transition-opacity group-hover:opacity-100"
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   setHistoryMenuId((prev) => (prev === item.id ? null : item.id));
                                 }}
                                 title={uiLang === "zh" ? "更多操作" : "More actions"}
                               >
-                                <MoreHorizontal size={15} />
+                                <MoreHorizontal size={14} />
                               </Button>
                               {historyMenuId === item.id && (
-                                <div className="absolute right-0 top-9 z-20 w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
+                                <div className="absolute right-0 top-7 z-20 w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
                                   <button
                                     type="button"
                                     className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
@@ -2173,6 +2233,7 @@ function MainApp() {
                   {settingsSection === "hotkey" && (
                   <Card className="tm-settings-card p-4">
                     <p className="text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
+                    <p className="mt-2 text-xs text-slate-500">{t("settingsHotkeyBuiltInHint")}</p>
                     <p className="mt-2 text-xs text-slate-500">Recommended: keep dictation and translation shortcuts distinct to avoid accidental mode switching.</p>
                     <div className="mt-3 space-y-3">
                       <div>
