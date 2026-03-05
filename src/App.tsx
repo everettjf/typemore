@@ -54,7 +54,7 @@ type HotkeyTriggerMode = "tap" | "long-press";
 type OverlayPosition = "top" | "bottom";
 type OutputMode = "auto-paste" | "paste-and-keep" | "copy-only";
 type TranslationTargetLang = "auto" | "en" | "zh-CN" | "ja" | "ko";
-type SettingsSection = "language" | "hotkey" | "cloud" | "temp";
+type SettingsSection = "language" | "hotkey" | "processing" | "providers" | "temp";
 type CloudVendor =
   | "openai"
   | "openrouter"
@@ -159,6 +159,29 @@ const CLOUD_VENDOR_OPTIONS: Array<{ value: CloudVendor; label: string }> = [
   { value: "ollama", label: "Ollama" },
 ];
 
+const TARGET_LANGUAGE_OPTIONS: Array<{ value: string; labelZh: string; labelEn: string }> = [
+  { value: "en", labelZh: "English (英文)", labelEn: "English" },
+  { value: "zh-CN", labelZh: "中文（简体）", labelEn: "Chinese (Simplified)" },
+  { value: "zh-TW", labelZh: "中文（繁体）", labelEn: "Chinese (Traditional)" },
+  { value: "ja", labelZh: "日语", labelEn: "Japanese" },
+  { value: "ko", labelZh: "韩语", labelEn: "Korean" },
+  { value: "es", labelZh: "西班牙语", labelEn: "Spanish" },
+  { value: "fr", labelZh: "法语", labelEn: "French" },
+  { value: "de", labelZh: "德语", labelEn: "German" },
+  { value: "pt", labelZh: "葡萄牙语", labelEn: "Portuguese" },
+  { value: "it", labelZh: "意大利语", labelEn: "Italian" },
+  { value: "ru", labelZh: "俄语", labelEn: "Russian" },
+  { value: "ar", labelZh: "阿拉伯语", labelEn: "Arabic" },
+  { value: "hi", labelZh: "印地语", labelEn: "Hindi" },
+  { value: "tr", labelZh: "土耳其语", labelEn: "Turkish" },
+  { value: "vi", labelZh: "越南语", labelEn: "Vietnamese" },
+  { value: "th", labelZh: "泰语", labelEn: "Thai" },
+  { value: "id", labelZh: "印尼语", labelEn: "Indonesian" },
+  { value: "pl", labelZh: "波兰语", labelEn: "Polish" },
+  { value: "nl", labelZh: "荷兰语", labelEn: "Dutch" },
+  { value: "sv", labelZh: "瑞典语", labelEn: "Swedish" },
+];
+
 const I18N = {
   zh: {
     navHome: "首页",
@@ -205,7 +228,8 @@ const I18N = {
     settingsSectionGeneral: "通用",
     settingsSectionLanguage: "语言",
     settingsSectionHotkey: "快捷键",
-    settingsSectionCloud: "云端模型",
+    settingsSectionCloud: "云端处理",
+    settingsSectionProviders: "模型厂商",
     settingsSectionTemp: "临时目录",
     settingsTempDirTitle: "临时目录",
     settingsTempDirDesc: "打开应用的临时目录，用于查看当前运行过程中的临时文件。",
@@ -243,19 +267,22 @@ const I18N = {
     settingsTranslationTargetZh: "中文",
     settingsTranslationTargetJa: "日文",
     settingsTranslationTargetKo: "韩文",
-    settingsCloudTitle: "云端模型",
-    settingsCloudDesc: "可配置多个云端厂商，用于识别后优化和翻译。",
+    settingsCloudTitle: "云端处理",
+    settingsCloudDesc: "将本地识别结果交给云端做二次优化与翻译。建议先在“模型厂商”里配置可用模型。",
+    settingsCloudGuide: "处理顺序：本地识别 -> 云端优化 -> (翻译快捷键时) 云端翻译。任一步失败会自动回退到上一步结果。",
     settingsCloudEnabled: "启用云端后处理",
     settingsCloudOptimizeProvider: "优化模型",
     settingsCloudTranslateProvider: "翻译模型",
     settingsCloudTargetLanguage: "云端目标语言",
     settingsCloudOptimizePrompt: "优化 Prompt",
     settingsCloudTranslatePrompt: "翻译 Prompt",
+    settingsCloudOptimizeSection: "优化阶段",
+    settingsCloudTranslateSection: "翻译阶段",
+    settingsCloudOptimizeDesc: "用于修复 ASR 文本中的标点、分词和识别错误。",
+    settingsCloudTranslateDesc: "仅在翻译快捷键触发时执行，输出为目标语言结果。",
     settingsCloudTimeoutMs: "请求超时(ms)",
     settingsCloudRetries: "失败重试次数",
     settingsCloudProviders: "厂商列表",
-    settingsCloudProviderName: "名称",
-    settingsCloudProviderId: "ID",
     settingsCloudProviderVendor: "厂商",
     settingsCloudProviderModel: "模型",
     settingsCloudProviderApiKey: "API Key",
@@ -265,6 +292,11 @@ const I18N = {
     settingsCloudRemoveProvider: "删除",
     settingsCloudSave: "保存云端设置",
     settingsCloudTest: "测试连接",
+    settingsCloudNoProviderHint: "暂无可用模型。请先到“模型厂商”新增并保存，再返回这里选择。",
+    settingsProvidersTitle: "模型厂商",
+    settingsProvidersDesc: "每条配置是一个可调用模型（厂商 + 模型）。优化/翻译会从这里选择。",
+    settingsProvidersGuide: "建议先添加 1 个优化模型，再按需添加 1 个翻译模型。",
+    settingsProvidersSave: "保存厂商配置",
     transcriptCloudProcessFailed: "云端处理失败，已回退本地结果: {error}",
     languageModeLabel: "界面语言",
     langAuto: "自动（跟随系统）",
@@ -344,7 +376,8 @@ const I18N = {
     settingsSectionGeneral: "General",
     settingsSectionLanguage: "Language",
     settingsSectionHotkey: "Hotkeys",
-    settingsSectionCloud: "Cloud Models",
+    settingsSectionCloud: "Cloud Processing",
+    settingsSectionProviders: "Model Providers",
     settingsSectionTemp: "Temporary Directory",
     settingsTempDirTitle: "Temporary Directory",
     settingsTempDirDesc: "Open app temporary directory to inspect runtime temp files.",
@@ -382,19 +415,22 @@ const I18N = {
     settingsTranslationTargetZh: "Chinese",
     settingsTranslationTargetJa: "Japanese",
     settingsTranslationTargetKo: "Korean",
-    settingsCloudTitle: "Cloud Models",
-    settingsCloudDesc: "Configure multiple cloud providers for post-ASR optimization and translation.",
+    settingsCloudTitle: "Cloud Processing",
+    settingsCloudDesc: "Send local ASR output to cloud for optimization and translation. Configure models in “Model Providers” first.",
+    settingsCloudGuide: "Pipeline: Local ASR -> Cloud optimize -> (translation hotkey) Cloud translate. It falls back automatically on failures.",
     settingsCloudEnabled: "Enable cloud post-processing",
     settingsCloudOptimizeProvider: "Optimize model",
     settingsCloudTranslateProvider: "Translate model",
     settingsCloudTargetLanguage: "Cloud target language",
     settingsCloudOptimizePrompt: "Optimize prompt",
     settingsCloudTranslatePrompt: "Translate prompt",
+    settingsCloudOptimizeSection: "Optimize Stage",
+    settingsCloudTranslateSection: "Translate Stage",
+    settingsCloudOptimizeDesc: "Fix ASR punctuation, segmentation, and recognition errors.",
+    settingsCloudTranslateDesc: "Runs only for translation hotkey and outputs target-language text.",
     settingsCloudTimeoutMs: "Timeout (ms)",
     settingsCloudRetries: "Retry count",
     settingsCloudProviders: "Providers",
-    settingsCloudProviderName: "Name",
-    settingsCloudProviderId: "ID",
     settingsCloudProviderVendor: "Vendor",
     settingsCloudProviderModel: "Model",
     settingsCloudProviderApiKey: "API Key",
@@ -404,6 +440,11 @@ const I18N = {
     settingsCloudRemoveProvider: "Remove",
     settingsCloudSave: "Save cloud settings",
     settingsCloudTest: "Test connection",
+    settingsCloudNoProviderHint: "No models configured yet. Go to “Model Providers” and add one first.",
+    settingsProvidersTitle: "Model Providers",
+    settingsProvidersDesc: "Each entry is one callable model (vendor + model). Optimize/Translate selects from this list.",
+    settingsProvidersGuide: "Start with one optimize model, then optionally add a dedicated translate model.",
+    settingsProvidersSave: "Save provider configs",
     transcriptCloudProcessFailed: "Cloud processing failed, fallback to local text: {error}",
     languageModeLabel: "Interface language",
     langAuto: "Auto (System)",
@@ -479,6 +520,24 @@ function defaultCloudSettings(): CloudSettings {
       maxRetries: 1,
     },
   };
+}
+
+function cloudVendorLabel(vendor: CloudVendor) {
+  return CLOUD_VENDOR_OPTIONS.find((item) => item.value === vendor)?.label ?? vendor;
+}
+
+function buildProviderLabel(provider: Pick<CloudProviderConfig, "vendor" | "model">) {
+  const model = provider.model.trim() || "model";
+  return `${cloudVendorLabel(provider.vendor)} / ${model}`;
+}
+
+function makeProviderId(vendor: CloudVendor, model: string) {
+  const normalized = `${vendor}-${model || "model"}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 36);
+  return `${normalized || "provider"}-${Date.now().toString().slice(-6)}`;
 }
 
 function localizedInitMessage(status: ModelInitStatus, uiLang: UiLang) {
@@ -1482,24 +1541,32 @@ function MainApp() {
 
   function updateCloudProvider(index: number, patch: Partial<CloudProviderConfig>) {
     setCloudSettings((prev) => {
-      const providers = prev.providers.map((provider, idx) =>
-        idx === index ? { ...provider, ...patch } : provider
-      );
+      const providers = prev.providers.map((provider, idx) => {
+        if (idx !== index) {
+          return provider;
+        }
+        const next = { ...provider, ...patch };
+        return {
+          ...next,
+          name: buildProviderLabel(next),
+        };
+      });
       return { ...prev, providers };
     });
   }
 
   function addCloudProvider() {
-    const idSuffix = Date.now().toString().slice(-6);
+    const vendor: CloudVendor = "openai";
+    const model = "gpt-4o-mini";
     setCloudSettings((prev) => ({
       ...prev,
       providers: [
         ...prev.providers,
         {
-          id: `provider_${idSuffix}`,
-          name: `Provider ${prev.providers.length + 1}`,
-          vendor: "openai",
-          model: "gpt-4o-mini",
+          id: makeProviderId(vendor, model),
+          name: buildProviderLabel({ vendor, model }),
+          vendor,
+          model,
           apiKey: "",
           baseUrl: "",
           enabled: true,
@@ -1533,8 +1600,8 @@ function MainApp() {
     try {
       const providers = cloudSettings.providers.map((provider, index) => ({
         ...provider,
-        id: provider.id.trim(),
-        name: provider.name.trim() || provider.id.trim(),
+        id: provider.id.trim() || makeProviderId(provider.vendor, provider.model),
+        name: buildProviderLabel(provider),
         model: provider.model.trim(),
         apiKey: provider.apiKey.trim(),
         baseUrl: provider.baseUrl?.trim() || null,
@@ -1558,6 +1625,10 @@ function MainApp() {
     } finally {
       setSavingCloudSettings(false);
     }
+  }
+
+  async function onSaveProvidersOnly() {
+    await onSaveCloudSettings();
   }
 
   async function onTestCloudProvider(providerId: string) {
@@ -1657,6 +1728,15 @@ function MainApp() {
     }),
     [t]
   );
+  const settingsSections: Array<{ key: SettingsSection; label: string }> = [
+    { key: "language", label: t("settingsSectionLanguage") },
+    { key: "hotkey", label: t("settingsSectionHotkey") },
+    { key: "processing", label: t("settingsSectionCloud") },
+    { key: "providers", label: t("settingsSectionProviders") },
+    { key: "temp", label: t("settingsSectionTemp") },
+  ];
+  const currentSettingsLabel =
+    settingsSections.find((item) => item.key === settingsSection)?.label ?? t("settingsTitle");
 
   return (
     <main className="typemore-app h-screen p-0 text-slate-900">
@@ -1977,12 +2057,7 @@ function MainApp() {
             <aside className="tm-settings-sidebar border-r border-slate-200 p-3">
               <div className="mb-3 px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">{t("settingsTitle")}</div>
               <div className="space-y-1">
-                {([
-                  { key: "language", label: t("settingsSectionLanguage") },
-                  { key: "hotkey", label: t("settingsSectionHotkey") },
-                  { key: "cloud", label: t("settingsSectionCloud") },
-                  { key: "temp", label: t("settingsSectionTemp") },
-                ] as Array<{ key: SettingsSection; label: string }>).map((item) => (
+                {settingsSections.map((item) => (
                   <button
                     key={item.key}
                     type="button"
@@ -2002,7 +2077,7 @@ function MainApp() {
 
             <section className="tm-settings-content flex min-h-0 flex-col overflow-hidden">
               <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-                <h2 className="text-3xl font-semibold tracking-tight">{t("settingsTitle")}</h2>
+                <h2 className="text-lg font-semibold tracking-tight text-slate-800">{currentSettingsLabel}</h2>
                 <Button variant="outline" className="h-9 w-9 justify-center p-0" onClick={() => setSettingsOpen(false)}>
                   <X size={16} />
                 </Button>
@@ -2014,6 +2089,7 @@ function MainApp() {
                   <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsLanguageTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
+                    <p className="mt-2 text-xs text-slate-500">UI language updates immediately and also syncs to backend prompt/status messages.</p>
                     <div className="mt-4 max-w-xs">
                       <label className="mb-1 block text-sm text-slate-700">{t("languageModeLabel")}</label>
                       <select
@@ -2033,6 +2109,7 @@ function MainApp() {
                   <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
+                    <p className="mt-2 text-xs text-slate-500">Recommended: keep dictation and translation shortcuts distinct to avoid accidental mode switching.</p>
                     <div className="mt-3 space-y-3">
                       <div>
                         <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyDictation")}</label>
@@ -2156,10 +2233,11 @@ function MainApp() {
                   </Card>
                   )}
 
-                  {settingsSection === "cloud" && (
+                  {settingsSection === "processing" && (
                   <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsCloudTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsCloudDesc")}</p>
+                    <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
                     <div className="mt-3 space-y-3">
                       <label className="flex items-center gap-2 text-sm text-slate-700">
                         <input
@@ -2171,8 +2249,23 @@ function MainApp() {
                         <span>{t("settingsCloudEnabled")}</span>
                       </label>
 
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
+                      {cloudSettings.providers.length === 0 && (
+                        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                          <div>{t("settingsCloudNoProviderHint")}</div>
+                          <button
+                            type="button"
+                            className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 font-medium text-amber-900"
+                            onClick={() => setSettingsSection("providers")}
+                          >
+                            {t("settingsSectionProviders")}
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
+                        <div className="text-sm font-semibold text-slate-900">{t("settingsCloudOptimizeSection")}</div>
+                        <p className="mt-1 text-xs text-slate-500">{t("settingsCloudOptimizeDesc")}</p>
+                        <div className="mt-3">
                           <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizeProvider")}</label>
                           <select
                             value={cloudSettings.pipeline.optimizeProviderId}
@@ -2180,164 +2273,83 @@ function MainApp() {
                             className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
                           >
                             <option value="">-</option>
-                            {cloudSettings.providers.map((provider) => (
+                            {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
                               <option key={provider.id} value={provider.id}>
-                                {provider.name} ({provider.model})
+                                {buildProviderLabel(provider)}
                               </option>
                             ))}
                           </select>
                         </div>
+                        <div className="mt-3">
+                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizePrompt")}</label>
+                          <textarea
+                            value={cloudSettings.pipeline.optimizePrompt}
+                            onChange={(event) => updateCloudPipeline("optimizePrompt", event.target.value)}
+                            className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
+                        <div className="text-sm font-semibold text-slate-900">{t("settingsCloudTranslateSection")}</div>
+                        <p className="mt-1 text-xs text-slate-500">{t("settingsCloudTranslateDesc")}</p>
                         <div>
-                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTranslateProvider")}</label>
+                          <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslateProvider")}</label>
                           <select
                             value={cloudSettings.pipeline.translateProviderId}
                             onChange={(event) => updateCloudPipeline("translateProviderId", event.target.value)}
                             className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
                           >
                             <option value="">-</option>
-                            {cloudSettings.providers.map((provider) => (
+                            {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
                               <option key={provider.id} value={provider.id}>
-                                {provider.name} ({provider.model})
+                                {buildProviderLabel(provider)}
                               </option>
                             ))}
                           </select>
                         </div>
-                      </div>
-
-                      <div className="grid gap-3 md:grid-cols-3">
-                        <div>
-                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTargetLanguage")}</label>
-                          <input
-                            value={cloudSettings.pipeline.targetLanguage}
-                            onChange={(event) => updateCloudPipeline("targetLanguage", event.target.value)}
-                            placeholder="en"
-                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTimeoutMs")}</label>
-                          <input
-                            type="number"
-                            value={cloudSettings.pipeline.timeoutMs}
-                            onChange={(event) => updateCloudPipeline("timeoutMs", Number(event.target.value) || 10000)}
-                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                          />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudRetries")}</label>
-                          <input
-                            type="number"
-                            value={cloudSettings.pipeline.maxRetries}
-                            onChange={(event) => updateCloudPipeline("maxRetries", Number(event.target.value) || 0)}
-                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizePrompt")}</label>
-                        <textarea
-                          value={cloudSettings.pipeline.optimizePrompt}
-                          onChange={(event) => updateCloudPipeline("optimizePrompt", event.target.value)}
-                          className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTranslatePrompt")}</label>
-                        <textarea
-                          value={cloudSettings.pipeline.translatePrompt}
-                          onChange={(event) => updateCloudPipeline("translatePrompt", event.target.value)}
-                          className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
-                        />
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <div className="text-sm font-medium text-slate-700">{t("settingsCloudProviders")}</div>
-                        <Button variant="outline" onClick={addCloudProvider}>
-                          <Plus size={14} />
-                          {t("settingsCloudAddProvider")}
-                        </Button>
-                      </div>
-
-                      <div className="space-y-3">
-                        {cloudSettings.providers.map((provider, index) => (
-                          <div key={`${provider.id}-${index}`} className="rounded-lg border border-slate-200 p-3">
-                            <div className="grid gap-3 md:grid-cols-2">
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderId")}</label>
-                                <input
-                                  value={provider.id}
-                                  onChange={(event) => updateCloudProvider(index, { id: event.target.value })}
-                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                                />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderName")}</label>
-                                <input
-                                  value={provider.name}
-                                  onChange={(event) => updateCloudProvider(index, { name: event.target.value })}
-                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                                />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderVendor")}</label>
-                                <select
-                                  value={provider.vendor}
-                                  onChange={(event) => updateCloudProvider(index, { vendor: event.target.value as CloudVendor })}
-                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                                >
-                                  {CLOUD_VENDOR_OPTIONS.map((item) => (
-                                    <option key={item.value} value={item.value}>
-                                      {item.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderModel")}</label>
-                                <input
-                                  value={provider.model}
-                                  onChange={(event) => updateCloudProvider(index, { model: event.target.value })}
-                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                                />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderApiKey")}</label>
-                                <input
-                                  type="password"
-                                  value={provider.apiKey}
-                                  onChange={(event) => updateCloudProvider(index, { apiKey: event.target.value })}
-                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                                />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderBaseUrl")}</label>
-                                <input
-                                  value={provider.baseUrl ?? ""}
-                                  onChange={(event) => updateCloudProvider(index, { baseUrl: event.target.value })}
-                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                                />
-                              </div>
-                            </div>
-                            <div className="mt-3 flex flex-wrap items-center gap-2">
-                              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-                                <input
-                                  type="checkbox"
-                                  checked={provider.enabled}
-                                  onChange={(event) => updateCloudProvider(index, { enabled: event.target.checked })}
-                                  className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                                />
-                                {t("settingsCloudProviderEnabled")}
-                              </label>
-                              <Button variant="outline" onClick={() => void onTestCloudProvider(provider.id)}>
-                                {t("settingsCloudTest")}
-                              </Button>
-                              <Button variant="outline" onClick={() => removeCloudProvider(index)}>
-                                {t("settingsCloudRemoveProvider")}
-                              </Button>
-                            </div>
+                        <div className="mt-3 grid gap-3 md:grid-cols-3">
+                          <div>
+                            <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTargetLanguage")}</label>
+                            <select
+                              value={cloudSettings.pipeline.targetLanguage || "en"}
+                              onChange={(event) => updateCloudPipeline("targetLanguage", event.target.value)}
+                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                            >
+                              {TARGET_LANGUAGE_OPTIONS.map((item) => (
+                                <option key={item.value} value={item.value}>
+                                  {uiLang === "zh" ? item.labelZh : item.labelEn}
+                                </option>
+                              ))}
+                            </select>
                           </div>
-                        ))}
+                          <div>
+                            <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTimeoutMs")}</label>
+                            <input
+                              type="number"
+                              value={cloudSettings.pipeline.timeoutMs}
+                              onChange={(event) => updateCloudPipeline("timeoutMs", Number(event.target.value) || 10000)}
+                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudRetries")}</label>
+                            <input
+                              type="number"
+                              value={cloudSettings.pipeline.maxRetries}
+                              onChange={(event) => updateCloudPipeline("maxRetries", Number(event.target.value) || 0)}
+                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslatePrompt")}</label>
+                          <textarea
+                            value={cloudSettings.pipeline.translatePrompt}
+                            onChange={(event) => updateCloudPipeline("translatePrompt", event.target.value)}
+                            className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                          />
+                        </div>
                       </div>
 
                       <div className="flex gap-2">
@@ -2350,10 +2362,96 @@ function MainApp() {
                   </Card>
                   )}
 
+                  {settingsSection === "providers" && (
+                  <Card className="tm-settings-card p-4">
+                    <div className="text-lg font-semibold text-slate-900">{t("settingsProvidersTitle")}</div>
+                    <p className="mt-1 text-sm text-slate-600">{t("settingsProvidersDesc")}</p>
+                    <p className="mt-2 text-xs text-slate-500">{t("settingsProvidersGuide")}</p>
+                    <div className="mt-3 flex items-center justify-between">
+                      <div className="text-sm font-medium text-slate-700">{t("settingsCloudProviders")}</div>
+                      <Button variant="outline" onClick={addCloudProvider}>
+                        <Plus size={14} />
+                        {t("settingsCloudAddProvider")}
+                      </Button>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {cloudSettings.providers.map((provider, index) => (
+                        <div key={`${provider.id}-${index}`} className="rounded-lg border border-slate-200 p-3">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderVendor")}</label>
+                              <select
+                                value={provider.vendor}
+                                onChange={(event) => updateCloudProvider(index, { vendor: event.target.value as CloudVendor })}
+                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                              >
+                                {CLOUD_VENDOR_OPTIONS.map((item) => (
+                                  <option key={item.value} value={item.value}>
+                                    {item.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderModel")}</label>
+                              <input
+                                value={provider.model}
+                                onChange={(event) => updateCloudProvider(index, { model: event.target.value })}
+                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderApiKey")}</label>
+                              <input
+                                type="password"
+                                value={provider.apiKey}
+                                onChange={(event) => updateCloudProvider(index, { apiKey: event.target.value })}
+                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderBaseUrl")}</label>
+                              <input
+                                value={provider.baseUrl ?? ""}
+                                onChange={(event) => updateCloudProvider(index, { baseUrl: event.target.value })}
+                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                              />
+                            </div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={provider.enabled}
+                                onChange={(event) => updateCloudProvider(index, { enabled: event.target.checked })}
+                                className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                              />
+                              {t("settingsCloudProviderEnabled")}
+                            </label>
+                            <Button variant="outline" onClick={() => void onTestCloudProvider(provider.id)}>
+                              {t("settingsCloudTest")}
+                            </Button>
+                            <Button variant="outline" onClick={() => removeCloudProvider(index)}>
+                              {t("settingsCloudRemoveProvider")}
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="flex gap-2">
+                        <Button variant="outline" onClick={onSaveProvidersOnly} disabled={savingCloudSettings}>
+                          {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
+                          {t("settingsProvidersSave")}
+                        </Button>
+                      </div>
+                    </div>
+                  </Card>
+                  )}
+
                   {settingsSection === "temp" && (
                   <Card className="tm-settings-card p-4">
                     <div className="text-lg font-semibold text-slate-900">{t("settingsTempDirTitle")}</div>
                     <p className="mt-1 text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
+                    <p className="mt-2 text-xs text-slate-500">Useful for diagnosing recordings, temporary conversion files, and release artifacts.</p>
                     <div className="mt-4">
                       <Button variant="outline" onClick={onOpenTempDir}>
                         <FolderOpen size={16} />
