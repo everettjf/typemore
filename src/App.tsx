@@ -1731,8 +1731,8 @@ function MainApp() {
   const settingsSections: Array<{ key: SettingsSection; label: string }> = [
     { key: "language", label: t("settingsSectionLanguage") },
     { key: "hotkey", label: t("settingsSectionHotkey") },
-    { key: "processing", label: t("settingsSectionCloud") },
     { key: "providers", label: t("settingsSectionProviders") },
+    { key: "processing", label: t("settingsSectionCloud") },
     { key: "temp", label: t("settingsSectionTemp") },
   ];
   const currentSettingsLabel =
@@ -2087,8 +2087,7 @@ function MainApp() {
                 <div className="space-y-4 pb-2">
                   {settingsSection === "language" && (
                   <Card className="tm-settings-card p-4">
-                    <div className="text-lg font-semibold text-slate-900">{t("settingsLanguageTitle")}</div>
-                    <p className="mt-1 text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
+                    <p className="text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
                     <p className="mt-2 text-xs text-slate-500">UI language updates immediately and also syncs to backend prompt/status messages.</p>
                     <div className="mt-4 max-w-xs">
                       <label className="mb-1 block text-sm text-slate-700">{t("languageModeLabel")}</label>
@@ -2107,8 +2106,7 @@ function MainApp() {
 
                   {settingsSection === "hotkey" && (
                   <Card className="tm-settings-card p-4">
-                    <div className="text-lg font-semibold text-slate-900">{t("settingsHotkeyTitle")}</div>
-                    <p className="mt-1 text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
+                    <p className="text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
                     <p className="mt-2 text-xs text-slate-500">Recommended: keep dictation and translation shortcuts distinct to avoid accidental mode switching.</p>
                     <div className="mt-3 space-y-3">
                       <div>
@@ -2235,8 +2233,7 @@ function MainApp() {
 
                   {settingsSection === "processing" && (
                   <Card className="tm-settings-card p-4">
-                    <div className="text-lg font-semibold text-slate-900">{t("settingsCloudTitle")}</div>
-                    <p className="mt-1 text-sm text-slate-600">{t("settingsCloudDesc")}</p>
+                    <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
                     <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
                     <div className="mt-3 space-y-3">
                       <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -2364,8 +2361,7 @@ function MainApp() {
 
                   {settingsSection === "providers" && (
                   <Card className="tm-settings-card p-4">
-                    <div className="text-lg font-semibold text-slate-900">{t("settingsProvidersTitle")}</div>
-                    <p className="mt-1 text-sm text-slate-600">{t("settingsProvidersDesc")}</p>
+                    <p className="text-sm text-slate-600">{t("settingsProvidersDesc")}</p>
                     <p className="mt-2 text-xs text-slate-500">{t("settingsProvidersGuide")}</p>
                     <div className="mt-3 flex items-center justify-between">
                       <div className="text-sm font-medium text-slate-700">{t("settingsCloudProviders")}</div>
@@ -2449,8 +2445,7 @@ function MainApp() {
 
                   {settingsSection === "temp" && (
                   <Card className="tm-settings-card p-4">
-                    <div className="text-lg font-semibold text-slate-900">{t("settingsTempDirTitle")}</div>
-                    <p className="mt-1 text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
+                    <p className="text-sm text-slate-600">{t("settingsTempDirDesc")}</p>
                     <p className="mt-2 text-xs text-slate-500">Useful for diagnosing recordings, temporary conversion files, and release artifacts.</p>
                     <div className="mt-4">
                       <Button variant="outline" onClick={onOpenTempDir}>
