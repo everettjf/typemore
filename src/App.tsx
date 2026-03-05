@@ -21,6 +21,8 @@ import {
   Home,
   Loader2,
   Mic,
+  MoreHorizontal,
+  Pencil,
   Plus,
   RefreshCcw,
   Settings,
@@ -712,6 +714,7 @@ function MainApp() {
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
+  const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1001,6 +1004,21 @@ function MainApp() {
   useEffect(() => () => {
     stopOverlayLevelMeter();
   }, []);
+
+  useEffect(() => {
+    if (!historyMenuId) {
+      return;
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest("[data-history-menu]")) {
+        return;
+      }
+      setHistoryMenuId(null);
+    };
+    window.addEventListener("mousedown", onPointerDown, true);
+    return () => window.removeEventListener("mousedown", onPointerDown, true);
+  }, [historyMenuId]);
 
   useEffect(() => {
     Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus(), loadGlobalShortcuts(), loadCloudSettings()]).catch((err) => {
@@ -1424,8 +1442,7 @@ function MainApp() {
 
   async function onOpenTempDir() {
     try {
-      const dir = await invoke<string>("open_temp_dir");
-      setTranscript(t("transcriptOpenTempDirOk", { dir }));
+      await invoke<string>("open_temp_dir");
     } catch (err) {
       setTranscript(t("transcriptOpenTempDirFailed", { error: String(err) }));
     }
@@ -1942,23 +1959,72 @@ function MainApp() {
                 <ScrollArea className="min-h-0 flex-1" viewportClassName="h-full w-full p-3">
                   <ul className="space-y-2">
                     {recordings.map((item) => (
-                      <li key={item.id}>
+                      <li key={item.id} className="relative">
                         <div
+                          role="button"
+                          tabIndex={0}
                           className={cn(
-                            "rounded-xl border px-3 py-2",
+                            "rounded-xl border px-3 py-2 transition",
                             selectedId === item.id ? "border-sky-300 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"
                           )}
+                          onClick={() => {
+                            setSelectedId(item.id);
+                            setHistoryMenuId(null);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              setSelectedId(item.id);
+                              setHistoryMenuId(null);
+                            }
+                          }}
                         >
-                          <button type="button" className="w-full text-left" onClick={() => setSelectedId(item.id)} title={item.filePath}>
-                            <div className="text-sm font-medium text-slate-800">{item.name}</div>
-                            <div className="mt-1 text-xs text-slate-500">{formatListTime(item.createdAtMs)}</div>
-                          </button>
-                          <div className="mt-2 flex items-center gap-2">
-                            <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => onRename(item)}>{t("rename")}</Button>
-                            <Button variant="outline" className="h-7 px-2 text-xs" onClick={() => onDelete(item)}>
-                              <Trash2 size={13} />
-                              {t("delete")}
-                            </Button>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="line-clamp-2 text-sm font-medium leading-5 text-slate-800">{item.name}</div>
+                              <div className="mt-1 text-xs text-slate-500">{formatListTime(item.createdAtMs)}</div>
+                            </div>
+                            <div className="relative" data-history-menu>
+                              <Button
+                                variant="outline"
+                                className="h-8 w-8 justify-center p-0"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setHistoryMenuId((prev) => (prev === item.id ? null : item.id));
+                                }}
+                                title={uiLang === "zh" ? "更多操作" : "More actions"}
+                              >
+                                <MoreHorizontal size={15} />
+                              </Button>
+                              {historyMenuId === item.id && (
+                                <div className="absolute right-0 top-9 z-20 w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setHistoryMenuId(null);
+                                      void onRename(item);
+                                    }}
+                                  >
+                                    <Pencil size={13} />
+                                    {t("rename")}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-slate-700 hover:bg-slate-100"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setHistoryMenuId(null);
+                                      void onDelete(item);
+                                    }}
+                                  >
+                                    <Trash2 size={13} />
+                                    {t("delete")}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </li>
