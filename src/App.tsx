@@ -2055,9 +2055,9 @@ function MainApp() {
           {page === "history" && (
             <div className="grid h-full min-h-0 gap-4 md:grid-cols-[340px_1fr]">
               <Card className="flex min-h-0 flex-col overflow-hidden">
-                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
                   <div className="text-lg font-semibold">{t("historyTitle")}</div>
-                  <div className="inline-flex items-center gap-2">
+                  <div className="inline-flex items-center gap-1.5">
                     <div className="text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
                     <Button
                       variant="outline"
@@ -2069,20 +2069,16 @@ function MainApp() {
                     >
                       ↻
                     </Button>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
-                  <Button
-                    variant="outline"
-                    className="h-7 px-2 py-1 text-xs"
-                    onClick={() => {
-                      setHistorySelectedIds(allHistorySelected ? [] : recordings.map((item) => item.id));
-                    }}
-                    disabled={recordings.length === 0}
-                  >
-                    {allHistorySelected ? t("historyClearSelection") : t("historySelectAll")}
-                  </Button>
-                  <div className="inline-flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      className="h-7 px-2 py-1 text-xs"
+                      onClick={() => {
+                        setHistorySelectedIds(allHistorySelected ? [] : recordings.map((item) => item.id));
+                      }}
+                      disabled={recordings.length === 0}
+                    >
+                      {allHistorySelected ? t("historyClearSelection") : t("historySelectAll")}
+                    </Button>
                     <span className="text-xs text-slate-500">{t("historySelectedCount", { count: historySelectedIds.length })}</span>
                     <Button
                       variant="destructive"
