@@ -101,6 +101,9 @@ bun run build
 
 # Rust compile check
 cd src-tauri && cargo check
+
+# Build macOS .dmg bundle
+bun run build:dmg
 ```
 
 ## Release to Homebrew

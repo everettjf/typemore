@@ -143,6 +143,9 @@ type TestCloudProviderResult = {
 
 const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
+const UPDATE_REMINDER_UNTIL_KEY = "typemore.update.remindUntil";
+const RELEASES_URL = "https://github.com/everettjf/typemore/releases";
+const RELEASES_API_LATEST_URL = "https://api.github.com/repos/everettjf/typemore/releases/latest";
 const DEFAULT_HOTKEY_DICTATION = "";
 const DEFAULT_HOTKEY_TRANSLATION = "";
 const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
@@ -186,6 +189,20 @@ const TARGET_LANGUAGE_OPTIONS: Array<{ value: string; labelZh: string; labelEn: 
   { value: "sv", labelZh: "瑞典语", labelEn: "Swedish" },
 ];
 
+const CLOUD_VENDOR_KEY_GUIDES: Record<CloudVendor, string | null> = {
+  openai: "https://platform.openai.com/api-keys",
+  openrouter: "https://openrouter.ai/keys",
+  anthropic: "https://console.anthropic.com/settings/keys",
+  gemini: "https://aistudio.google.com/app/apikey",
+  groq: "https://console.groq.com/keys",
+  deepseek: "https://platform.deepseek.com/api_keys",
+  mistral: "https://console.mistral.ai/api-keys/",
+  xai: "https://console.x.ai/",
+  perplexity: "https://www.perplexity.ai/settings/api",
+  together: "https://api.together.xyz/settings/api-keys",
+  ollama: null,
+};
+
 const I18N = {
   zh: {
     navHome: "首页",
@@ -206,6 +223,12 @@ const I18N = {
     statsTotal: "累计输入",
     statsUnitChars: "字",
     statsVersion: "版本",
+    statsEmptyTitle: "还没有统计数据",
+    statsEmptyDesc: "首次使用时，先进行一次录音识别。识别后这里会自动展示真实趋势与统计。",
+    updateAvailableTitle: "发现新版本",
+    updateAvailableDesc: "当前 {current}，最新 {latest}。",
+    updateOpenRelease: "查看更新",
+    updateRemindLater: "7 天后提醒",
     modelReady: "模型已就绪",
     modelInitializing: "初始化中",
     modelNotReady: "模型未就绪",
@@ -307,6 +330,9 @@ const I18N = {
     settingsCloudProviderVendor: "厂商",
     settingsCloudProviderModel: "模型",
     settingsCloudProviderApiKey: "API Key",
+    settingsCloudProviderApiKeyHint: "到厂商控制台创建并粘贴 API Key",
+    settingsCloudProviderApiKeyDocs: "注册/获取 API Key",
+    settingsCloudProviderNoApiKeyNeeded: "Ollama 本地运行，无需 API Key",
     settingsCloudProviderBaseUrl: "Base URL(可选)",
     settingsCloudProviderEnabled: "启用",
     settingsCloudAddProvider: "新增厂商",
@@ -371,6 +397,12 @@ const I18N = {
     statsTotal: "Total",
     statsUnitChars: "chars",
     statsVersion: "Version",
+    statsEmptyTitle: "No data yet",
+    statsEmptyDesc: "Run your first transcription and this page will automatically show real trends and usage statistics.",
+    updateAvailableTitle: "New version available",
+    updateAvailableDesc: "Current {current}, latest {latest}.",
+    updateOpenRelease: "Open releases",
+    updateRemindLater: "Remind in 7 days",
     modelReady: "Model Ready",
     modelInitializing: "Initializing",
     modelNotReady: "Not Ready",
@@ -472,6 +504,9 @@ const I18N = {
     settingsCloudProviderVendor: "Vendor",
     settingsCloudProviderModel: "Model",
     settingsCloudProviderApiKey: "API Key",
+    settingsCloudProviderApiKeyHint: "Create and paste your API key from the provider console",
+    settingsCloudProviderApiKeyDocs: "Get API key",
+    settingsCloudProviderNoApiKeyNeeded: "Ollama runs locally and does not require an API key",
     settingsCloudProviderBaseUrl: "Base URL (optional)",
     settingsCloudProviderEnabled: "Enabled",
     settingsCloudAddProvider: "Add provider",
@@ -524,6 +559,35 @@ function formatI18n(template: string, vars?: Record<string, string | number>) {
     return template;
   }
   return template.replace(/\{(\w+)\}/g, (_, key: string) => String(vars[key] ?? ""));
+}
+
+function parseVersion(version: string) {
+  const core = version.trim().replace(/^v/i, "").split("-")[0];
+  const parts = core.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.length === 0 || parts.some((part) => Number.isNaN(part))) {
+    return null;
+  }
+  return parts;
+}
+
+function isVersionGreater(a: string, b: string) {
+  const left = parseVersion(a);
+  const right = parseVersion(b);
+  if (!left || !right) {
+    return false;
+  }
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const lv = left[i] ?? 0;
+    const rv = right[i] ?? 0;
+    if (lv > rv) {
+      return true;
+    }
+    if (lv < rv) {
+      return false;
+    }
+  }
+  return false;
 }
 
 function detectSystemLang(): UiLang {
@@ -745,6 +809,7 @@ function MainApp() {
   const [historySelectedIds, setHistorySelectedIds] = useState<string[]>([]);
   const [usageStats, setUsageStats] = useState<UsageStats>(() => emptyUsageStats());
   const [appVersion, setAppVersion] = useState("-");
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1195,6 +1260,37 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
+    if (!appVersion || appVersion === "-") {
+      return;
+    }
+    const remindUntilRaw = window.localStorage.getItem(UPDATE_REMINDER_UNTIL_KEY);
+    const remindUntil = remindUntilRaw ? Number.parseInt(remindUntilRaw, 10) : 0;
+    if (Number.isFinite(remindUntil) && remindUntil > Date.now()) {
+      return;
+    }
+    void (async () => {
+      try {
+        const response = await fetch(RELEASES_API_LATEST_URL, {
+          headers: { Accept: "application/vnd.github+json" },
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as { tag_name?: string; name?: string };
+        const latest = payload.tag_name ?? payload.name ?? "";
+        if (!latest) {
+          return;
+        }
+        if (isVersionGreater(latest, appVersion)) {
+          setLatestVersion(latest.replace(/^v/i, ""));
+        }
+      } catch {
+        // Keep startup resilient when update check fails.
+      }
+    })();
+  }, [appVersion]);
+
+  useEffect(() => {
     void refreshUsageStats(recordings);
   }, [recordings]);
 
@@ -1622,6 +1718,12 @@ function MainApp() {
     }
   }
 
+  function onRemindUpdateLater() {
+    const remindUntil = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    window.localStorage.setItem(UPDATE_REMINDER_UNTIL_KEY, String(remindUntil));
+    setLatestVersion(null);
+  }
+
   async function onSaveHotkeys() {
     const dictation = hotkeyDictation.trim();
     const translation = hotkeyTranslation.trim();
@@ -1985,6 +2087,27 @@ function MainApp() {
                 </div>
               </header>
 
+              {latestVersion && (
+                <Card className="border-emerald-200 bg-emerald-50/70 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-semibold text-emerald-900">{t("updateAvailableTitle")}</div>
+                      <div className="text-xs text-emerald-800">
+                        {t("updateAvailableDesc", { current: `v${appVersion}`, latest: `v${latestVersion}` })}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" className="h-8 text-xs" onClick={() => window.open(RELEASES_URL, "_blank", "noopener,noreferrer")}>
+                        {t("updateOpenRelease")}
+                      </Button>
+                      <Button variant="outline" className="h-8 text-xs" onClick={onRemindUpdateLater}>
+                        {t("updateRemindLater")}
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              )}
+
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <Card className="p-3">
                   <div className="text-xs text-slate-500">{t("statsToday")}</div>
@@ -2027,7 +2150,19 @@ function MainApp() {
                   </div>
                 </div>
                 <div className="h-[340px] w-full">
-                  <Line data={dailyInputChartData} options={dailyInputChartOptions} />
+                  {usageStats.totalChars === 0 ? (
+                    <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-6 text-center">
+                      <div>
+                        <div className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
+                          <Sparkles size={18} />
+                        </div>
+                        <div className="mt-3 text-base font-semibold text-slate-800">{t("statsEmptyTitle")}</div>
+                        <div className="mt-1 text-sm text-slate-500">{t("statsEmptyDesc")}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <Line data={dailyInputChartData} options={dailyInputChartOptions} />
+                  )}
                 </div>
               </Card>
 
@@ -2782,6 +2917,23 @@ function MainApp() {
                                 onChange={(event) => updateCloudProvider(index, { apiKey: event.target.value })}
                                 className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
                               />
+                              {CLOUD_VENDOR_KEY_GUIDES[provider.vendor] ? (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {t("settingsCloudProviderApiKeyHint")} ·{" "}
+                                  <a
+                                    href={CLOUD_VENDOR_KEY_GUIDES[provider.vendor] ?? "#"}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-sky-700 hover:text-sky-800 hover:underline"
+                                  >
+                                    {t("settingsCloudProviderApiKeyDocs")}
+                                  </a>
+                                </div>
+                              ) : (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {t("settingsCloudProviderNoApiKeyNeeded")}
+                                </div>
+                              )}
                             </div>
                             <div>
                               <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderBaseUrl")}</label>
