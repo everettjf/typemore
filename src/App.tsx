@@ -2077,39 +2077,40 @@ function MainApp() {
     <main className="typemore-app h-screen p-0 text-slate-900">
       {showInlineOverlay && (
         <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2">
-          <div className="pointer-events-auto inline-flex items-center gap-3 rounded-full border border-slate-700 bg-black/90 px-3 py-2 text-white shadow-xl">
+          <div className="pointer-events-auto rounded-[28px] border border-slate-700/80 bg-black/92 p-1 shadow-[0_10px_28px_rgba(0,0,0,0.45)]">
+            <div className="inline-flex items-center gap-3 rounded-[22px] border border-slate-600/70 bg-gradient-to-b from-slate-900 to-black px-3 py-2 text-white">
             {inlineOverlay.phase === "listening" && (
               <>
                 <button
                   type="button"
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-500/80 bg-slate-900 text-slate-200 hover:bg-slate-800"
                   onClick={() => {
                     void onInlineOverlayCancel();
                   }}
                 >
-                  <X size={17} />
+                  <X size={18} />
                 </button>
-                <div className="flex h-5 items-end gap-1">
+                <div className="flex h-6 items-center gap-1.5 px-1">
                   {Array.from({ length: 10 }).map((_, index) => (
                     <span
                       key={index}
-                      className="w-0.5 rounded-full bg-white/85 animate-pulse"
+                      className="w-0.5 rounded-full bg-white/90 animate-pulse"
                       style={{
-                        height: `${6 + ((index % 4) + 1) * 2}px`,
-                        animationDuration: "900ms",
-                        animationDelay: `${index * 60}ms`,
+                        height: `${5 + ((index % 5) + 1) * 2}px`,
+                        animationDuration: "1000ms",
+                        animationDelay: `${index * 55}ms`,
                       }}
                     />
                   ))}
                 </div>
                 <button
                   type="button"
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white text-slate-900 hover:bg-slate-100"
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-900 hover:bg-slate-100"
                   onClick={() => {
                     void onInlineOverlayConfirm();
                   }}
                 >
-                  <Check size={17} />
+                  <Check size={18} />
                 </button>
               </>
             )}
@@ -2123,6 +2124,7 @@ function MainApp() {
                 </div>
               </>
             )}
+            </div>
           </div>
         </div>
       )}
