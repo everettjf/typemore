@@ -248,6 +248,7 @@ const I18N = {
     settingsProjectInfo: "项目信息",
     settingsProjectWebsite: "官网",
     settingsProjectGithub: "开源仓库",
+    settingsProjectMoreApps: "更多 App",
     settingsProjectLicense: "协议",
     settingsLanguageTitle: "语言",
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
@@ -408,6 +409,7 @@ const I18N = {
     settingsProjectInfo: "Project Info",
     settingsProjectWebsite: "Website",
     settingsProjectGithub: "Open-source repo",
+    settingsProjectMoreApps: "More apps",
     settingsProjectLicense: "License",
     settingsLanguageTitle: "Language",
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
@@ -2700,6 +2702,17 @@ function MainApp() {
                           className="text-sky-700 hover:text-sky-800 hover:underline"
                         >
                           github.com/everettjf/typemore
+                        </a>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">{t("settingsProjectMoreApps")}</span>
+                        <a
+                          href="https://xnu.app"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sky-700 hover:text-sky-800 hover:underline"
+                        >
+                          xnu.app
                         </a>
                       </div>
                       <div className="flex items-center justify-between gap-3">

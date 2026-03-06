@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://discord.com/invite/eGzEaP6TzR"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white"></a>
   <a href="https://typemore.app"><img alt="Website" src="https://img.shields.io/badge/Website-typemore.app-0EA5E9"></a>
+  <a href="https://xnu.app"><img alt="More Apps" src="https://img.shields.io/badge/More%20Apps-xnu.app-0f766e"></a>
   <a href="https://github.com/everettjf/typemore"><img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-4b8bbe"></a>
 </p>
 
