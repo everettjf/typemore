@@ -217,6 +217,11 @@ const I18N = {
     countItems: "{count} 条",
     historyTitle: "历史",
     historyRefresh: "刷新",
+    historySelectAll: "全选",
+    historyClearSelection: "取消全选",
+    historyDeleteSelected: "删除所选",
+    historySelectedCount: "已选 {count} 条",
+    historyDeleteSelectedConfirm: "确认删除已选中的 {count} 条录音吗？此操作不可恢复。",
     rename: "重命名",
     delete: "删除",
     retranscribe: "重新识别",
@@ -368,6 +373,11 @@ const I18N = {
     countItems: "{count} items",
     historyTitle: "History",
     historyRefresh: "Refresh",
+    historySelectAll: "Select all",
+    historyClearSelection: "Clear selection",
+    historyDeleteSelected: "Delete selected",
+    historySelectedCount: "{count} selected",
+    historyDeleteSelectedConfirm: "Delete {count} selected recordings? This cannot be undone.",
     rename: "Rename",
     delete: "Delete",
     retranscribe: "Retranscribe",
@@ -730,6 +740,7 @@ function MainApp() {
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
   const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
+  const [historySelectedIds, setHistorySelectedIds] = useState<string[]>([]);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -759,6 +770,7 @@ function MainApp() {
     () => recordings.find((item) => item.id === selectedId) ?? null,
     [recordings, selectedId]
   );
+  const allHistorySelected = recordings.length > 0 && historySelectedIds.length === recordings.length;
 
   const modelReady = initStatus.ready;
 
@@ -968,6 +980,7 @@ function MainApp() {
       }
       return items.some((item) => item.id === prev) ? prev : (items.length > 0 ? items[0].id : null);
     });
+    setHistorySelectedIds((prev) => prev.filter((id) => items.some((item) => item.id === id)));
   }
 
   async function loadInitStatus() {
@@ -1464,6 +1477,7 @@ function MainApp() {
   async function onDelete(recording: RecordingItem) {
     try {
       await invoke("delete_recording", { id: recording.id });
+      setHistorySelectedIds((prev) => prev.filter((id) => id !== recording.id));
       setRecordings((prev) => {
         const next = prev.filter((item) => item.id !== recording.id);
         if (selectedId === recording.id) {
@@ -1472,6 +1486,44 @@ function MainApp() {
         }
         return next;
       });
+    } catch (err) {
+      setTranscript(t("transcriptDeleteFailed", { error: String(err) }));
+    }
+  }
+
+  function onToggleHistoryItem(id: string, checked: boolean) {
+    setHistorySelectedIds((prev) => {
+      if (checked) {
+        if (prev.includes(id)) {
+          return prev;
+        }
+        return [...prev, id];
+      }
+      return prev.filter((item) => item !== id);
+    });
+  }
+
+  async function onDeleteSelectedHistory() {
+    if (historySelectedIds.length === 0) {
+      return;
+    }
+    const ok = window.confirm(t("historyDeleteSelectedConfirm", { count: historySelectedIds.length }));
+    if (!ok) {
+      return;
+    }
+    try {
+      await Promise.all(historySelectedIds.map((id) => invoke("delete_recording", { id })));
+      const selectedSet = new Set(historySelectedIds);
+      setRecordings((prev) => {
+        const next = prev.filter((item) => !selectedSet.has(item.id));
+        if (selectedId && selectedSet.has(selectedId)) {
+          setSelectedId(next.length > 0 ? next[0].id : null);
+          setTranscript("");
+        }
+        return next;
+      });
+      setHistorySelectedIds([]);
+      setHistoryMenuId(null);
     } catch (err) {
       setTranscript(t("transcriptDeleteFailed", { error: String(err) }));
     }
@@ -2009,6 +2061,31 @@ function MainApp() {
                     </Button>
                   </div>
                 </div>
+                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2">
+                  <Button
+                    variant="outline"
+                    className="h-7 px-2 py-1 text-xs"
+                    onClick={() => {
+                      setHistorySelectedIds(allHistorySelected ? [] : recordings.map((item) => item.id));
+                    }}
+                    disabled={recordings.length === 0}
+                  >
+                    {allHistorySelected ? t("historyClearSelection") : t("historySelectAll")}
+                  </Button>
+                  <div className="inline-flex items-center gap-2">
+                    <span className="text-xs text-slate-500">{t("historySelectedCount", { count: historySelectedIds.length })}</span>
+                    <Button
+                      variant="destructive"
+                      className="h-7 px-2 py-1 text-xs"
+                      onClick={() => {
+                        void onDeleteSelectedHistory();
+                      }}
+                      disabled={historySelectedIds.length === 0}
+                    >
+                      {t("historyDeleteSelected")}
+                    </Button>
+                  </div>
+                </div>
 
                 <ScrollArea className="min-h-0 flex-1" viewportClassName="h-full w-full p-3">
                   <ul className="space-y-2">
@@ -2039,9 +2116,22 @@ function MainApp() {
                           }}
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="line-clamp-2 text-sm font-medium leading-5 text-slate-800">{item.name}</div>
-                              <div className="mt-1 text-xs text-slate-500">{formatListTime(item.createdAtMs)}</div>
+                            <div className="flex min-w-0 items-start gap-2">
+                              <input
+                                type="checkbox"
+                                className="mt-1 h-4 w-4 rounded border-slate-300 accent-sky-600"
+                                checked={historySelectedIds.includes(item.id)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                }}
+                                onChange={(event) => {
+                                  onToggleHistoryItem(item.id, event.target.checked);
+                                }}
+                              />
+                              <div className="min-w-0">
+                                <div className="line-clamp-2 text-sm font-medium leading-5 text-slate-800">{item.name}</div>
+                                <div className="mt-1 text-xs text-slate-500">{formatListTime(item.createdAtMs)}</div>
+                              </div>
                             </div>
                             <div className="relative self-center" data-history-menu>
                               <Button
