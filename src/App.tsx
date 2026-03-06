@@ -2055,10 +2055,12 @@ function MainApp() {
           {page === "history" && (
             <div className="grid h-full min-h-0 gap-4 md:grid-cols-[340px_1fr]">
               <Card className="flex min-h-0 flex-col overflow-hidden">
-                <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                  <div className="text-lg font-semibold">{t("historyTitle")}</div>
-                  <div className="inline-flex items-center gap-1.5">
-                    <div className="text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
+                <div className="border-b border-slate-200 px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="inline-flex items-center gap-2">
+                      <div className="whitespace-nowrap text-lg font-semibold">{t("historyTitle")}</div>
+                      <div className="whitespace-nowrap text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
+                    </div>
                     <Button
                       variant="outline"
                       className="h-7 w-7 justify-center p-0 text-[15px] leading-none"
@@ -2069,9 +2071,11 @@ function MainApp() {
                     >
                       ↻
                     </Button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                     <Button
                       variant="outline"
-                      className="h-7 px-2 py-1 text-xs"
+                      className="h-7 px-2 py-1 text-xs whitespace-nowrap"
                       onClick={() => {
                         setHistorySelectedIds(allHistorySelected ? [] : recordings.map((item) => item.id));
                       }}
@@ -2079,10 +2083,10 @@ function MainApp() {
                     >
                       {allHistorySelected ? t("historyClearSelection") : t("historySelectAll")}
                     </Button>
-                    <span className="text-xs text-slate-500">{t("historySelectedCount", { count: historySelectedIds.length })}</span>
+                    <span className="whitespace-nowrap text-xs text-slate-500">{t("historySelectedCount", { count: historySelectedIds.length })}</span>
                     <Button
                       variant="destructive"
-                      className="h-7 px-2 py-1 text-xs"
+                      className="h-7 px-2 py-1 text-xs whitespace-nowrap"
                       onClick={() => {
                         void onDeleteSelectedHistory();
                       }}
