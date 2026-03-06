@@ -45,7 +45,7 @@ import { cn } from "./lib/utils";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
-type Page = "home" | "history" | "dictionary";
+type Page = "home" | "history" | "dictionary" | "cloud";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
 type CaptureTarget = "dictation" | "translation" | null;
@@ -1781,6 +1781,7 @@ function MainApp() {
     { key: "home", label: t("navHome"), icon: Home },
     { key: "history", label: t("navHistory"), icon: History },
     { key: "dictionary", label: t("navDictionary"), icon: BookText },
+    { key: "cloud", label: t("settingsSectionCloud"), icon: Sparkles },
   ];
   const dailyInputStats = useMemo(() => buildDemoDailyInputStats(), []);
   const dailyInputToday = dailyInputStats[dailyInputStats.length - 1]?.chars ?? 0;
@@ -1848,7 +1849,6 @@ function MainApp() {
     { key: "language", label: t("settingsSectionLanguage") },
     { key: "hotkey", label: t("settingsSectionHotkey") },
     { key: "providers", label: t("settingsSectionProviders") },
-    { key: "processing", label: t("settingsSectionCloud") },
     { key: "temp", label: t("settingsSectionTemp") },
     { key: "about", label: t("settingsSectionAbout") },
   ];
@@ -2216,6 +2216,143 @@ function MainApp() {
                 </div>
 
                 <Textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder={t("transcriptPlaceholder")} />
+              </Card>
+            </div>
+          )}
+
+          {page === "cloud" && (
+            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_1fr]">
+              <header className="flex items-center justify-between">
+                <h2 className="text-3xl font-semibold tracking-tight">{t("settingsSectionCloud")}</h2>
+              </header>
+
+              <Card className="p-4">
+                <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
+                <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
+                <div className="mt-3 space-y-3">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={cloudSettings.pipeline.enabled}
+                      onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                    />
+                    <span>{t("settingsCloudEnabled")}</span>
+                  </label>
+
+                  {cloudSettings.providers.length === 0 && (
+                    <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      <div>{t("settingsCloudNoProviderHint")}</div>
+                      <button
+                        type="button"
+                        className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 font-medium text-amber-900"
+                        onClick={() => {
+                          setSettingsSection("providers");
+                          setSettingsOpen(true);
+                        }}
+                      >
+                        {t("settingsSectionProviders")}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
+                    <div className="text-sm font-semibold text-slate-900">{t("settingsCloudOptimizeSection")}</div>
+                    <p className="mt-1 text-xs text-slate-500">{t("settingsCloudOptimizeDesc")}</p>
+                    <div className="mt-3">
+                      <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizeProvider")}</label>
+                      <select
+                        value={cloudSettings.pipeline.optimizeProviderId}
+                        onChange={(event) => updateCloudPipeline("optimizeProviderId", event.target.value)}
+                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                      >
+                        <option value="">-</option>
+                        {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {buildProviderLabel(provider)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="mt-3">
+                      <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizePrompt")}</label>
+                      <textarea
+                        value={cloudSettings.pipeline.optimizePrompt}
+                        onChange={(event) => updateCloudPipeline("optimizePrompt", event.target.value)}
+                        className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
+                    <div className="text-sm font-semibold text-slate-900">{t("settingsCloudTranslateSection")}</div>
+                    <p className="mt-1 text-xs text-slate-500">{t("settingsCloudTranslateDesc")}</p>
+                    <div>
+                      <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslateProvider")}</label>
+                      <select
+                        value={cloudSettings.pipeline.translateProviderId}
+                        onChange={(event) => updateCloudPipeline("translateProviderId", event.target.value)}
+                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                      >
+                        <option value="">-</option>
+                        {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
+                          <option key={provider.id} value={provider.id}>
+                            {buildProviderLabel(provider)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTargetLanguage")}</label>
+                        <select
+                          value={cloudSettings.pipeline.targetLanguage || "en"}
+                          onChange={(event) => updateCloudPipeline("targetLanguage", event.target.value)}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        >
+                          {TARGET_LANGUAGE_OPTIONS.map((item) => (
+                            <option key={item.value} value={item.value}>
+                              {uiLang === "zh" ? item.labelZh : item.labelEn}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTimeoutMs")}</label>
+                        <input
+                          type="number"
+                          value={cloudSettings.pipeline.timeoutMs}
+                          onChange={(event) => updateCloudPipeline("timeoutMs", Number(event.target.value) || 10000)}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudRetries")}</label>
+                        <input
+                          type="number"
+                          value={cloudSettings.pipeline.maxRetries}
+                          onChange={(event) => updateCloudPipeline("maxRetries", Number(event.target.value) || 0)}
+                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslatePrompt")}</label>
+                      <textarea
+                        value={cloudSettings.pipeline.translatePrompt}
+                        onChange={(event) => updateCloudPipeline("translatePrompt", event.target.value)}
+                        className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={onSaveCloudSettings} disabled={savingCloudSettings}>
+                      {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {t("settingsCloudSave")}
+                    </Button>
+                  </div>
+                </div>
               </Card>
             </div>
           )}
