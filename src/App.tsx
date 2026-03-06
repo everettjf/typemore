@@ -21,7 +21,6 @@ import {
   Home,
   Loader2,
   Mic,
-  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCcw,
@@ -2000,13 +1999,13 @@ function MainApp() {
                     <div className="text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
                     <Button
                       variant="outline"
-                      className="h-7 w-7 justify-center p-0"
+                      className="h-7 w-7 justify-center p-0 text-[15px] leading-none"
                       onClick={() => {
                         void loadRecordings();
                       }}
                       title={t("historyRefresh")}
                     >
-                      <RefreshCcw size={13} />
+                      ↻
                     </Button>
                   </div>
                 </div>
@@ -2047,14 +2046,14 @@ function MainApp() {
                             <div className="relative self-center" data-history-menu>
                               <Button
                                 variant="outline"
-                                className="h-6 w-6 justify-center p-0 opacity-0 transition-opacity group-hover:opacity-100"
+                                className="h-6 w-6 justify-center p-0 text-[15px] leading-none text-slate-500 opacity-0 transition-opacity group-hover:opacity-100"
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   setHistoryMenuId((prev) => (prev === item.id ? null : item.id));
                                 }}
                                 title={uiLang === "zh" ? "更多操作" : "More actions"}
                               >
-                                <MoreHorizontal size={14} />
+                                ⋯
                               </Button>
                               {historyMenuId === item.id && (
                                 <div className="absolute right-0 top-7 z-20 w-32 rounded-md border border-slate-200 bg-white p-1 shadow-lg">
