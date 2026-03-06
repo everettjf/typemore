@@ -6,8 +6,8 @@
 
 <p align="center">
   <a href="https://discord.gg/YOUR_DISCORD_INVITE"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white"></a>
-  <a href="https://your-website.example.com"><img alt="Website" src="https://img.shields.io/badge/Website-Coming%20Soon-0EA5E9"></a>
-  <img alt="License" src="https://img.shields.io/badge/License-TBD-lightgrey">
+  <a href="https://typemore.app"><img alt="Website" src="https://img.shields.io/badge/Website-typemore.app-0EA5E9"></a>
+  <a href="https://github.com/everettjf/typemore"><img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-4b8bbe"></a>
 </p>
 
 ## Table of Contents
@@ -147,7 +147,7 @@ For larger feature proposals, open an issue first for discussion.
 
 ## License
 
-License is currently TBD. Add a `LICENSE` file before public release.
+Apache License 2.0. See [LICENSE](./LICENSE).
 
 ## Star History
 

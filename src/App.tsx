@@ -245,6 +245,10 @@ const I18N = {
     settingsTempDirTitle: "临时目录",
     settingsTempDirDesc: "打开应用的临时目录，用于查看当前运行过程中的临时文件。",
     settingsOpenTempDir: "打开临时目录",
+    settingsProjectInfo: "项目信息",
+    settingsProjectWebsite: "官网",
+    settingsProjectGithub: "开源仓库",
+    settingsProjectLicense: "协议",
     settingsLanguageTitle: "语言",
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
     settingsHotkeyTitle: "全局快捷键",
@@ -401,6 +405,10 @@ const I18N = {
     settingsTempDirTitle: "Temporary Directory",
     settingsTempDirDesc: "Open app temporary directory to inspect runtime temp files.",
     settingsOpenTempDir: "Open Temporary Directory",
+    settingsProjectInfo: "Project Info",
+    settingsProjectWebsite: "Website",
+    settingsProjectGithub: "Open-source repo",
+    settingsProjectLicense: "License",
     settingsLanguageTitle: "Language",
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
     settingsHotkeyTitle: "Global Hotkey",
@@ -2668,6 +2676,36 @@ function MainApp() {
                         <FolderOpen size={16} />
                         {t("settingsOpenTempDir")}
                       </Button>
+                    </div>
+                    <Separator className="my-4" />
+                    <div className="space-y-2 text-sm text-slate-700">
+                      <div className="font-medium text-slate-900">{t("settingsProjectInfo")}</div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">{t("settingsProjectWebsite")}</span>
+                        <a
+                          href="https://typemore.app"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sky-700 hover:text-sky-800 hover:underline"
+                        >
+                          typemore.app
+                        </a>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">{t("settingsProjectGithub")}</span>
+                        <a
+                          href="https://github.com/everettjf/typemore"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sky-700 hover:text-sky-800 hover:underline"
+                        >
+                          github.com/everettjf/typemore
+                        </a>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500">{t("settingsProjectLicense")}</span>
+                        <span>Apache-2.0</span>
+                      </div>
                     </div>
                   </Card>
                   )}
