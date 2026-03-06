@@ -2657,6 +2657,46 @@ fn hide_overlay(app: AppHandle) -> Result<(), String> {
     emit_overlay_state(&app, "hidden", None, None)
 }
 
+fn schedule_hide_overlay(app: &AppHandle, delay_ms: u64) {
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        let _ = emit_overlay_state(&app_clone, "hidden", None, None);
+    });
+}
+
+#[tauri::command]
+fn native_hotkey_confirm(app: AppHandle) -> Result<(), String> {
+    let active_action = app
+        .state::<AppState>()
+        .native_hotkey_session
+        .lock()
+        .ok()
+        .and_then(|s| s.active_action.clone());
+    if let Some(action) = active_action {
+        handle_native_hotkey_stop(&app, &action);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn native_hotkey_cancel(app: AppHandle) -> Result<(), String> {
+    let tx = app
+        .state::<AppState>()
+        .native_recorder_tx
+        .lock()
+        .map_err(|_| "failed to access native recorder tx".to_string())?
+        .clone();
+    if let Some(tx) = tx {
+        tx.send(NativeRecorderCommand::Reset {
+            reason: "user-cancel".to_string(),
+        })
+        .map_err(|e| format!("failed to cancel recording: {e}"))?;
+    }
+    let _ = emit_overlay_state(&app, "hidden", None, None);
+    Ok(())
+}
+
 fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
     let (tx, rx) = mpsc::channel::<NativeRecorderCommand>();
     {
@@ -2695,6 +2735,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                             }),
                             None,
                         );
+                        schedule_hide_overlay(&app_handle, 1400);
                         reset_native_session_to_idle(&app_handle);
                         continue;
                     }
@@ -2734,6 +2775,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                                     }),
                                     None,
                                 );
+                                schedule_hide_overlay(&app_handle, 1400);
                                 reset_native_session_to_idle(&app_handle);
                                 continue;
                             }
@@ -2757,6 +2799,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                             )),
                             None,
                         );
+                        schedule_hide_overlay(&app_handle, 1200);
                         reset_native_session_to_idle(&app_handle);
                         continue;
                     }
@@ -2775,6 +2818,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                                 }),
                                 None,
                             );
+                            schedule_hide_overlay(&app_handle, 1500);
                             reset_native_session_to_idle(&app_handle);
                             continue;
                         }
@@ -2798,6 +2842,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                                 }),
                                 None,
                             );
+                            schedule_hide_overlay(&app_handle, 1500);
                             reset_native_session_to_idle(&app_handle);
                             continue;
                         }
@@ -2858,6 +2903,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                             )),
                             None,
                         );
+                        schedule_hide_overlay(&app_handle, 1200);
                     } else if let Err(err) = type_text_to_focused_app_impl(&app_handle, &output) {
                         let _ = emit_overlay_state(
                             &app_handle,
@@ -2869,16 +2915,12 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                             }),
                             None,
                         );
+                        schedule_hide_overlay(&app_handle, 1700);
                     } else {
                         let _ = emit_overlay_state(&app_handle, "ready", Some(output), None);
+                        schedule_hide_overlay(&app_handle, 1200);
                     }
                     reset_native_session_to_idle(&app_handle);
-
-                    let app_clone = app_handle.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(1600));
-                        let _ = emit_overlay_state(&app_clone, "hidden", None, None);
-                    });
                 }
                 NativeRecorderCommand::Reset { reason } => {
                     eprintln!("[typemore][recorder] cmd=reset reason={}", reason);
@@ -2886,6 +2928,10 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         let _ = stop_native_recording_internal(&mut recorder);
                     }
                     reset_native_session_to_idle(&app_handle);
+                    if reason == "user-cancel" {
+                        let _ = emit_overlay_state(&app_handle, "hidden", None, None);
+                        continue;
+                    }
                     let _ = emit_overlay_state(
                         &app_handle,
                         "ready",
@@ -2896,11 +2942,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         )),
                         None,
                     );
-                    let app_clone = app_handle.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_millis(1200));
-                        let _ = emit_overlay_state(&app_clone, "hidden", None, None);
-                    });
+                    schedule_hide_overlay(&app_handle, 1200);
                 }
             }
         }
@@ -3298,7 +3340,9 @@ pub fn run() {
             process_text_with_cloud,
             set_overlay_state,
             set_overlay_level,
-            hide_overlay
+            hide_overlay,
+            native_hotkey_confirm,
+            native_hotkey_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

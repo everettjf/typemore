@@ -225,6 +225,10 @@ const I18N = {
     statsVersion: "版本",
     statsEmptyTitle: "还没有统计数据",
     statsEmptyDesc: "首次使用时，先进行一次录音识别。识别后这里会自动展示真实趋势与统计。",
+    statsEmptyInitModel: "初始化模型",
+    statsEmptyTryNow: "立即测试",
+    statsEmptyTryHint: "点击输入框后按 Fn（或 Fn+Shift）开始测试。",
+    statsEmptyInputPlaceholder: "这里是测试输入区，识别结果会自动粘贴到当前焦点位置。",
     updateAvailableTitle: "发现新版本",
     updateAvailableDesc: "当前 {current}，最新 {latest}。",
     updateOpenRelease: "查看更新",
@@ -399,6 +403,10 @@ const I18N = {
     statsVersion: "Version",
     statsEmptyTitle: "No data yet",
     statsEmptyDesc: "Run your first transcription and this page will automatically show real trends and usage statistics.",
+    statsEmptyInitModel: "Initialize model",
+    statsEmptyTryNow: "Try now",
+    statsEmptyTryHint: "Focus the input and press Fn (or Fn+Shift) to test.",
+    statsEmptyInputPlaceholder: "Test input area. Recognized text will paste to the focused control.",
     updateAvailableTitle: "New version available",
     updateAvailableDesc: "Current {current}, latest {latest}.",
     updateOpenRelease: "Open releases",
@@ -745,22 +753,18 @@ function OverlayWindowApp() {
           {phase === "listening" ? (
             <div className="flex h-4 items-end gap-1">
               {[0.55, 0.8, 1, 0.82, 0.58].map((factor, index) => {
-                const active = Math.max(0.1, Math.min(1, level * 1.45 * factor));
-                const heightPx = 4 + Math.round(active * 10);
-                const speakingBar = active > 0.22;
+                const active = Math.max(0.1, Math.min(1, level * 1.2 * factor));
                 return (
                   <span
                     key={index}
                     className={cn(
                       "w-1 rounded-full transition-all duration-75",
-                      speakingBar ? "bg-emerald-300" : "bg-white"
+                      active > 0.2 ? "bg-emerald-300" : "bg-white"
                     )}
                     style={{
-                      height: `${heightPx}px`,
-                      opacity: 0.35 + active * 0.65,
-                      boxShadow: speakingBar
-                        ? "0 0 8px rgba(110, 231, 183, 0.7)"
-                        : "0 0 0 rgba(255,255,255,0)",
+                      height: `${6 + index}px`,
+                      opacity: 0.5 + active * 0.5,
+                      boxShadow: active > 0.2 ? "0 0 6px rgba(110, 231, 183, 0.45)" : "none",
                     }}
                   />
                 );
@@ -810,6 +814,9 @@ function MainApp() {
   const [usageStats, setUsageStats] = useState<UsageStats>(() => emptyUsageStats());
   const [appVersion, setAppVersion] = useState("-");
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [homeTryText, setHomeTryText] = useState("");
+  const [inlineOverlay, setInlineOverlay] = useState<OverlayStatePayload>({ phase: "hidden", text: "" });
+  const [mainFocused, setMainFocused] = useState(() => document.hasFocus());
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -839,6 +846,7 @@ function MainApp() {
     () => recordings.find((item) => item.id === selectedId) ?? null,
     [recordings, selectedId]
   );
+  const showInlineOverlay = mainFocused && inlineOverlay.phase !== "hidden";
   const allHistorySelected = recordings.length > 0 && historySelectedIds.length === recordings.length;
 
   const modelReady = initStatus.ready;
@@ -1208,6 +1216,7 @@ function MainApp() {
     let unlistenInit: (() => void) | undefined;
     let unlistenHotkey: (() => void) | undefined;
     let unlistenRecordingSaved: (() => void) | undefined;
+    let unlistenOverlay: (() => void) | undefined;
 
     listen<ModelInitStatus>("model-init-progress", (event) => {
       setInitStatus(event.payload);
@@ -1240,6 +1249,18 @@ function MainApp() {
       })
       .catch(() => {});
 
+    listen<OverlayStatePayload>("overlay-state", (event) => {
+      setInlineOverlay({
+        phase: event.payload.phase,
+        text: event.payload.text ?? "",
+        level: event.payload.level ?? 0,
+      });
+    })
+      .then((fn) => {
+        unlistenOverlay = fn;
+      })
+      .catch(() => {});
+
     return () => {
       if (unlistenInit) {
         unlistenInit();
@@ -1250,8 +1271,22 @@ function MainApp() {
       if (unlistenRecordingSaved) {
         unlistenRecordingSaved();
       }
+      if (unlistenOverlay) {
+        unlistenOverlay();
+      }
     };
   }, [t]);
+
+  useEffect(() => {
+    const onFocus = () => setMainFocused(true);
+    const onBlur = () => setMainFocused(false);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   useEffect(() => {
     getVersion()
@@ -1724,6 +1759,23 @@ function MainApp() {
     setLatestVersion(null);
   }
 
+  async function onInlineOverlayConfirm() {
+    try {
+      await invoke("native_hotkey_confirm");
+    } catch {
+      // ignore
+    }
+  }
+
+  async function onInlineOverlayCancel() {
+    try {
+      await invoke("native_hotkey_cancel");
+      setInlineOverlay({ phase: "hidden", text: "" });
+    } catch {
+      // ignore
+    }
+  }
+
   async function onSaveHotkeys() {
     const dictation = hotkeyDictation.trim();
     const translation = hotkeyTranslation.trim();
@@ -2023,6 +2075,57 @@ function MainApp() {
 
   return (
     <main className="typemore-app h-screen p-0 text-slate-900">
+      {showInlineOverlay && (
+        <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2">
+          <div className="pointer-events-auto inline-flex items-center gap-3 rounded-full border border-slate-700 bg-black/90 px-3 py-2 text-white shadow-xl">
+            {inlineOverlay.phase === "listening" && (
+              <>
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800"
+                  onClick={() => {
+                    void onInlineOverlayCancel();
+                  }}
+                >
+                  <X size={17} />
+                </button>
+                <div className="flex h-5 items-end gap-1">
+                  {Array.from({ length: 10 }).map((_, index) => (
+                    <span
+                      key={index}
+                      className="w-0.5 rounded-full bg-white/85 animate-pulse"
+                      style={{
+                        height: `${6 + ((index % 4) + 1) * 2}px`,
+                        animationDuration: "900ms",
+                        animationDelay: `${index * 60}ms`,
+                      }}
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white text-slate-900 hover:bg-slate-100"
+                  onClick={() => {
+                    void onInlineOverlayConfirm();
+                  }}
+                >
+                  <Check size={17} />
+                </button>
+              </>
+            )}
+            {inlineOverlay.phase !== "listening" && (
+              <>
+                <div className="rounded-full bg-white px-3 py-1 text-base font-semibold text-slate-900">
+                  {inlineOverlay.phase === "thinking" ? "..." : "Ready"}
+                </div>
+                <div className="max-w-[420px] truncate text-lg font-medium text-white/90">
+                  {inlineOverlay.text || (inlineOverlay.phase === "thinking" ? "Processing..." : "")}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <div className="tm-shell mx-auto grid h-full max-w-[1540px] grid-cols-1 gap-3 rounded-3xl p-3 backdrop-blur md:grid-cols-[230px_1fr] md:p-4">
         <aside className="tm-side flex min-h-0 flex-col rounded-2xl bg-white/95 p-3">
           <div className="px-2 pb-3 pt-1">
@@ -2152,12 +2255,30 @@ function MainApp() {
                 <div className="h-[340px] w-full">
                   {usageStats.totalChars === 0 ? (
                     <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50/60 p-6 text-center">
-                      <div>
+                      <div className="w-full max-w-2xl">
                         <div className="mx-auto inline-flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
                           <Sparkles size={18} />
                         </div>
                         <div className="mt-3 text-base font-semibold text-slate-800">{t("statsEmptyTitle")}</div>
                         <div className="mt-1 text-sm text-slate-500">{t("statsEmptyDesc")}</div>
+                        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                          {!modelReady && (
+                            <Button variant="outline" className="h-9" onClick={onInitModel} disabled={isBusy || initStatus.running}>
+                              {initStatus.running ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
+                              {t("statsEmptyInitModel")}
+                            </Button>
+                          )}
+                          <Button variant="outline" className="h-9" onClick={() => setPage("history")}>
+                            {t("statsEmptyTryNow")}
+                          </Button>
+                        </div>
+                        <div className="mt-3 text-xs text-slate-500">{t("statsEmptyTryHint")}</div>
+                        <Textarea
+                          className="mx-auto mt-2 h-24 max-w-xl bg-white/80"
+                          value={homeTryText}
+                          onChange={(event) => setHomeTryText(event.target.value)}
+                          placeholder={t("statsEmptyInputPlaceholder")}
+                        />
                       </div>
                     </div>
                   ) : (
