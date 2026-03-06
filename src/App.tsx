@@ -21,7 +21,6 @@ import {
   History,
   Home,
   Loader2,
-  Mic,
   Pencil,
   Plus,
   RefreshCcw,
@@ -1370,24 +1369,6 @@ function MainApp() {
     setIsRecording(false);
   }
 
-  async function onRecordClick() {
-    if (!modelReady) {
-      setTranscript(t("transcriptNeedInit"));
-      return;
-    }
-    if (isRecording) {
-      stopRecording();
-      return;
-    }
-    try {
-      recordingByHotkeyRef.current = false;
-      activeHotkeyActionRef.current = null;
-      await startRecording();
-    } catch (err) {
-      setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
-    }
-  }
-
   async function ensureModelReadyForHotkey() {
     if (!modelReadyRef.current) {
       try {
@@ -2039,19 +2020,6 @@ function MainApp() {
                     <p className="mt-1 text-sm text-slate-600">{t("statsDailyInputDesc")}</p>
                   </div>
                   <div className="flex gap-2">
-                    <Button
-                      className={cn(
-                        "h-10 rounded-lg px-3 inline-flex items-center gap-2 shadow-sm",
-                        isRecording
-                          ? "bg-red-600 hover:bg-red-700 border-red-600 hover:border-red-700"
-                          : "bg-slate-900 hover:bg-slate-800 border-slate-900 hover:border-slate-800"
-                      )}
-                      onClick={onRecordClick}
-                      disabled={isBusy || initStatus.running}
-                    >
-                      <Mic size={14} />
-                      {isRecording ? t("stopRecording") : t("startRecording")}
-                    </Button>
                     <Button variant="outline" className="h-10" onClick={onInitModel} disabled={isBusy || initStatus.running}>
                       {initStatus.running ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
                       {initStatus.running ? t("initModelRunning") : modelReady ? t("initModelReady") : t("initModelStart")}
@@ -2095,11 +2063,13 @@ function MainApp() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="inline-flex items-center gap-2">
                       <div className="whitespace-nowrap text-lg font-semibold">{t("historyTitle")}</div>
-                      <div className="whitespace-nowrap text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-500">
+                        {t("countItems", { count: recordings.length })}
+                      </span>
                     </div>
                     <Button
                       variant="outline"
-                      className="h-7 w-7 justify-center p-0 text-[15px] leading-none"
+                      className="h-8 w-8 justify-center p-0 text-[15px] leading-none"
                       onClick={() => {
                         void loadRecordings();
                       }}
@@ -2108,10 +2078,10 @@ function MainApp() {
                       ↻
                     </Button>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                  <div className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50/70 px-2 py-2">
                     <Button
                       variant="outline"
-                      className="h-7 px-2 py-1 text-xs whitespace-nowrap"
+                      className="h-8 px-3 py-1 text-xs whitespace-nowrap"
                       onClick={() => {
                         setHistorySelectedIds(allHistorySelected ? [] : recordings.map((item) => item.id));
                       }}
@@ -2119,10 +2089,18 @@ function MainApp() {
                     >
                       {allHistorySelected ? t("historyClearSelection") : t("historySelectAll")}
                     </Button>
-                    <span className="whitespace-nowrap text-xs text-slate-500">{t("historySelectedCount", { count: historySelectedIds.length })}</span>
+                    <div className="inline-flex items-center gap-2">
+                      <span className="whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs text-slate-500">
+                        {t("historySelectedCount", { count: historySelectedIds.length })}
+                      </span>
                     <Button
-                      variant="destructive"
-                      className="h-7 px-2 py-1 text-xs whitespace-nowrap"
+                      variant="outline"
+                      className={cn(
+                        "h-8 px-3 py-1 text-xs whitespace-nowrap",
+                        historySelectedIds.length > 0
+                          ? "border-red-300 bg-red-50 text-red-700 hover:border-red-400 hover:bg-red-100"
+                          : "text-slate-400"
+                      )}
                       onClick={() => {
                         void onDeleteSelectedHistory();
                       }}
@@ -2130,6 +2108,7 @@ function MainApp() {
                     >
                       {t("historyDeleteSelected")}
                     </Button>
+                    </div>
                   </div>
                 </div>
 
