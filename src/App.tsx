@@ -55,7 +55,7 @@ type HotkeyTriggerMode = "tap" | "long-press";
 type OverlayPosition = "top" | "bottom";
 type OutputMode = "auto-paste" | "paste-and-keep" | "copy-only";
 type TranslationTargetLang = "auto" | "en" | "zh-CN" | "ja" | "ko";
-type SettingsSection = "language" | "hotkey" | "processing" | "providers" | "temp";
+type SettingsSection = "language" | "hotkey" | "processing" | "providers" | "temp" | "about";
 type CloudVendor =
   | "openai"
   | "openrouter"
@@ -242,6 +242,7 @@ const I18N = {
     settingsSectionCloud: "云端处理",
     settingsSectionProviders: "模型厂商",
     settingsSectionTemp: "临时目录",
+    settingsSectionAbout: "关于",
     settingsTempDirTitle: "临时目录",
     settingsTempDirDesc: "打开应用的临时目录，用于查看当前运行过程中的临时文件。",
     settingsOpenTempDir: "打开临时目录",
@@ -403,6 +404,7 @@ const I18N = {
     settingsSectionCloud: "Cloud Processing",
     settingsSectionProviders: "Model Providers",
     settingsSectionTemp: "Temporary Directory",
+    settingsSectionAbout: "About",
     settingsTempDirTitle: "Temporary Directory",
     settingsTempDirDesc: "Open app temporary directory to inspect runtime temp files.",
     settingsOpenTempDir: "Open Temporary Directory",
@@ -1855,6 +1857,7 @@ function MainApp() {
     { key: "providers", label: t("settingsSectionProviders") },
     { key: "processing", label: t("settingsSectionCloud") },
     { key: "temp", label: t("settingsSectionTemp") },
+    { key: "about", label: t("settingsSectionAbout") },
   ];
   const currentSettingsLabel =
     settingsSections.find((item) => item.key === settingsSection)?.label ?? t("settingsTitle");
@@ -2679,8 +2682,13 @@ function MainApp() {
                         {t("settingsOpenTempDir")}
                       </Button>
                     </div>
-                    <Separator className="my-4" />
-                    <div className="space-y-2 text-sm text-slate-700">
+                  </Card>
+                  )}
+
+                  {settingsSection === "about" && (
+                  <Card className="tm-settings-card p-4">
+                    <p className="text-sm text-slate-600">Project website, open-source repository, and license information.</p>
+                    <div className="mt-4 space-y-2 text-sm text-slate-700">
                       <div className="font-medium text-slate-900">{t("settingsProjectInfo")}</div>
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-slate-500">{t("settingsProjectWebsite")}</span>
