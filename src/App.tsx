@@ -37,6 +37,7 @@ import { badgeClass, defaultInitStatus, formatCurrentRecordingTime, formatListTi
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
+import { Progress } from "./components/ui/progress";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { Separator } from "./components/ui/separator";
 import { Textarea } from "./components/ui/textarea";
@@ -241,6 +242,14 @@ const I18N = {
     initModelRunning: "初始化中...",
     initModelReady: "模型已就绪",
     initModelStart: "初始化模型",
+    modelInitModalTitle: "正在准备本地模型",
+    modelInitModalDesc: "首次下载通常需要几分钟，窗口会在完成后自动关闭。",
+    modelInitModalKeepTip: "你可以保持当前页面打开，完成后即可直接开始录音。",
+    modelInitPhaseDownload: "下载模型文件",
+    modelInitPhaseExtract: "解压模型文件",
+    modelInitPhaseScan: "校验模型完整性",
+    modelInitPhaseDone: "初始化完成",
+    statsEmptyQuickTestTitle: "快速测试输入",
     viewHistory: "查看历史",
     recentRecordings: "最近录音",
     noRecordings: "还没有录音记录，先初始化模型并开始录音。",
@@ -419,6 +428,14 @@ const I18N = {
     initModelRunning: "Initializing...",
     initModelReady: "Model Ready",
     initModelStart: "Initialize Model",
+    modelInitModalTitle: "Preparing local model",
+    modelInitModalDesc: "First-time download usually takes a few minutes and closes automatically when done.",
+    modelInitModalKeepTip: "Keep this page open. You can start recording immediately after completion.",
+    modelInitPhaseDownload: "Downloading model files",
+    modelInitPhaseExtract: "Extracting model files",
+    modelInitPhaseScan: "Validating model files",
+    modelInitPhaseDone: "Initialization complete",
+    statsEmptyQuickTestTitle: "Quick test input",
     viewHistory: "View History",
     recentRecordings: "Recent Recordings",
     noRecordings: "No recordings yet. Initialize the model and start recording.",
@@ -878,6 +895,22 @@ function MainApp() {
     return (key: keyof typeof dict, vars?: Record<string, string | number>) =>
       formatI18n(dict[key], vars);
   }, [uiLang]);
+  const initProgressPercent = Math.max(0, Math.min(100, Math.round(Number(initStatus.progress || 0))));
+  const initPhaseLabel = useMemo(() => {
+    if (initStatus.phase === "download") {
+      return t("modelInitPhaseDownload");
+    }
+    if (initStatus.phase === "extract") {
+      return t("modelInitPhaseExtract");
+    }
+    if (initStatus.phase === "scan") {
+      return t("modelInitPhaseScan");
+    }
+    if (initStatus.phase === "done") {
+      return t("modelInitPhaseDone");
+    }
+    return initStatus.message || t("modelInitializing");
+  }, [initStatus.message, initStatus.phase, t]);
 
   useEffect(() => {
     const backendLang = uiLang === "zh" ? "zh-CN" : "en-US";
@@ -2274,13 +2307,18 @@ function MainApp() {
                             {t("statsEmptyTryNow")}
                           </Button>
                         </div>
-                        <div className="mt-3 text-xs text-slate-500">{t("statsEmptyTryHint")}</div>
-                        <Textarea
-                          className="mx-auto mt-2 h-24 max-w-xl bg-white/80"
-                          value={homeTryText}
-                          onChange={(event) => setHomeTryText(event.target.value)}
-                          placeholder={t("statsEmptyInputPlaceholder")}
-                        />
+                        <div className="mx-auto mt-4 w-full max-w-[760px] rounded-xl border border-slate-200 bg-white/90 p-3 text-left shadow-sm">
+                          <div className="rounded-lg border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-3">
+                            <div className="text-sm font-semibold text-slate-800">{t("statsEmptyQuickTestTitle")}</div>
+                            <div className="mt-1 text-xs text-slate-500">{t("statsEmptyTryHint")}</div>
+                          </div>
+                          <Textarea
+                            className="mt-3 min-h-[120px] w-full resize-none border-slate-200 bg-white"
+                            value={homeTryText}
+                            onChange={(event) => setHomeTryText(event.target.value)}
+                            placeholder={t("statsEmptyInputPlaceholder")}
+                          />
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -3180,6 +3218,32 @@ function MainApp() {
                 {t("fallbackClose")}
               </Button>
             </div>
+          </Card>
+        </div>
+      )}
+
+      {initStatus.running && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/45 backdrop-blur-[2px]" />
+          <Card className="relative w-[min(540px,92vw)] border-slate-200 p-5 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 text-sky-700">
+                <Loader2 size={18} className="animate-spin" />
+              </div>
+              <div>
+                <div className="text-lg font-semibold text-slate-900">{t("modelInitModalTitle")}</div>
+                <div className="mt-0.5 text-sm text-slate-500">{t("modelInitModalDesc")}</div>
+              </div>
+            </div>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm font-medium text-slate-700">{initPhaseLabel}</span>
+                <span className="text-sm font-semibold text-slate-900">{initProgressPercent}%</span>
+              </div>
+              <Progress value={initProgressPercent} className="mt-2 h-2.5" />
+              <div className="mt-2 text-xs text-slate-500">{initStatus.message}</div>
+            </div>
+            <div className="mt-3 text-xs text-slate-500">{t("modelInitModalKeepTip")}</div>
           </Card>
         </div>
       )}
