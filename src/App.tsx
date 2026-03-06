@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   CategoryScale,
   Chart as ChartJS,
@@ -37,7 +38,6 @@ import { badgeClass, defaultInitStatus, formatCurrentRecordingTime, formatListTi
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Card } from "./components/ui/card";
-import { Progress } from "./components/ui/progress";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { Separator } from "./components/ui/separator";
 import { Textarea } from "./components/ui/textarea";
@@ -198,11 +198,15 @@ const I18N = {
     featureOpenSource: "Open Source",
     featureOfflineFirst: "Offline First",
     featureByod: "BYOD",
-    statsDailyInputTitle: "每日输入文字统计（Demo）",
-    statsDailyInputDesc: "最近 14 天通过语音输入的字数趋势。",
+    statsDailyInputTitle: "输入趋势",
+    statsDailyInputDesc: "基于历史录音与缓存文本自动统计最近 30 天数据。",
     statsToday: "今日",
     statsDailyAvg: "日均",
+    statsMonthTotal: "本月输入",
+    statsYearTotal: "本年输入",
+    statsTotal: "累计输入",
     statsUnitChars: "字",
+    statsVersion: "版本",
     modelReady: "模型已就绪",
     modelInitializing: "初始化中",
     modelNotReady: "模型未就绪",
@@ -359,11 +363,15 @@ const I18N = {
     featureOpenSource: "Open Source",
     featureOfflineFirst: "Offline First",
     featureByod: "BYOD",
-    statsDailyInputTitle: "Daily Input Characters (Demo)",
-    statsDailyInputDesc: "Trend of characters typed by voice in the last 14 days.",
+    statsDailyInputTitle: "Input Trend",
+    statsDailyInputDesc: "Auto-calculated from recording history and cached transcripts for the last 30 days.",
     statsToday: "Today",
     statsDailyAvg: "Daily Avg",
+    statsMonthTotal: "This Month",
+    statsYearTotal: "This Year",
+    statsTotal: "Total",
     statsUnitChars: "chars",
+    statsVersion: "Version",
     modelReady: "Model Ready",
     modelInitializing: "Initializing",
     modelNotReady: "Not Ready",
@@ -571,55 +579,40 @@ function makeProviderId(vendor: CloudVendor, model: string) {
   return `${normalized || "provider"}-${Date.now().toString().slice(-6)}`;
 }
 
-function localizedInitMessage(status: ModelInitStatus, uiLang: UiLang) {
-  if (uiLang === "zh") {
-    return status.message;
-  }
-
-  if (status.phase === "done" || status.ready) {
-    return "Model is ready";
-  }
-  if (status.phase === "queued") {
-    return "Initialization queued";
-  }
-  if (status.phase === "extract") {
-    return "Extracting model files...";
-  }
-  if (status.phase === "scan") {
-    return "Validating model files...";
-  }
-  if (status.phase === "error") {
-    return status.error ?? "Model initialization failed";
-  }
-  if (status.phase === "download") {
-    const match = status.message.match(/([0-9]+(?:\.[0-9]+)?)%\s*\(([^)]+)\)/);
-    if (match) {
-      return `Downloading model... ${match[1]}% (${match[2]})`;
-    }
-    return `Downloading model... ${Math.max(0, Math.min(100, status.progress)).toFixed(1)}%`;
-  }
-
-  return status.message;
-}
-
 type DailyInputStat = {
   dateLabel: string;
   chars: number;
 };
 
-function buildDemoDailyInputStats(): DailyInputStat[] {
-  const seed = [520, 610, 460, 700, 830, 760, 910, 680, 740, 990, 840, 1120, 970, 1260];
+type UsageStats = {
+  todayChars: number;
+  dailyAvgChars: number;
+  monthChars: number;
+  yearChars: number;
+  totalChars: number;
+  dailyPoints: DailyInputStat[];
+};
+
+const HOME_STATS_DAYS = 30;
+
+function emptyUsageStats(): UsageStats {
   const today = new Date();
-  return seed.map((chars, index) => {
+  const dailyPoints: DailyInputStat[] = [];
+  for (let offset = HOME_STATS_DAYS - 1; offset >= 0; offset -= 1) {
     const d = new Date(today);
-    d.setDate(today.getDate() - (seed.length - 1 - index));
+    d.setDate(today.getDate() - offset);
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const dd = String(d.getDate()).padStart(2, "0");
-    return {
-      dateLabel: `${mm}/${dd}`,
-      chars,
-    };
-  });
+    dailyPoints.push({ dateLabel: `${mm}/${dd}`, chars: 0 });
+  }
+  return {
+    todayChars: 0,
+    dailyAvgChars: 0,
+    monthChars: 0,
+    yearChars: 0,
+    totalChars: 0,
+    dailyPoints,
+  };
 }
 
 function OverlayWindowApp() {
@@ -751,6 +744,8 @@ function MainApp() {
   const [fallbackText, setFallbackText] = useState<string | null>(null);
   const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
   const [historySelectedIds, setHistorySelectedIds] = useState<string[]>([]);
+  const [usageStats, setUsageStats] = useState<UsageStats>(() => emptyUsageStats());
+  const [appVersion, setAppVersion] = useState("-");
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -993,6 +988,78 @@ function MainApp() {
     setHistorySelectedIds((prev) => prev.filter((id) => items.some((item) => item.id === id)));
   }
 
+  async function refreshUsageStats(items: RecordingItem[]) {
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    const month = now.getMonth();
+    const year = now.getFullYear();
+
+    const recentKeys: string[] = [];
+    const recentLabels = new Map<string, string>();
+    for (let offset = HOME_STATS_DAYS - 1; offset >= 0; offset -= 1) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - offset);
+      const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      recentKeys.push(key);
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      recentLabels.set(key, `${mm}/${dd}`);
+    }
+
+    const charByDay = new Map<string, number>();
+    for (const key of recentKeys) {
+      charByDay.set(key, 0);
+    }
+
+    let todayChars = 0;
+    let monthChars = 0;
+    let yearChars = 0;
+    let totalChars = 0;
+
+    const texts = await Promise.all(
+      items.map((item) =>
+        invoke<string | null>("get_recording_cached_transcript", { id: item.id }).catch(() => null)
+      )
+    );
+
+    items.forEach((item, idx) => {
+      const text = texts[idx] ?? "";
+      const chars = Array.from(text).length;
+      if (!chars) {
+        return;
+      }
+      totalChars += chars;
+      const d = new Date(item.createdAtMs);
+      if (d.getFullYear() === year) {
+        yearChars += chars;
+        if (d.getMonth() === month) {
+          monthChars += chars;
+        }
+      }
+      const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      if (dayKey === todayKey) {
+        todayChars += chars;
+      }
+      if (charByDay.has(dayKey)) {
+        charByDay.set(dayKey, (charByDay.get(dayKey) ?? 0) + chars);
+      }
+    });
+
+    const dailyPoints = recentKeys.map((key) => ({
+      dateLabel: recentLabels.get(key) ?? key,
+      chars: charByDay.get(key) ?? 0,
+    }));
+    const dailyAvgChars = Math.round(dailyPoints.reduce((sum, p) => sum + p.chars, 0) / Math.max(1, dailyPoints.length));
+    setUsageStats({
+      todayChars,
+      dailyAvgChars,
+      monthChars,
+      yearChars,
+      totalChars,
+      dailyPoints,
+    });
+  }
+
   async function loadInitStatus() {
     const status = await invoke<ModelInitStatus>("get_model_init_status");
     setInitStatus(status);
@@ -1121,6 +1188,16 @@ function MainApp() {
       }
     };
   }, [t]);
+
+  useEffect(() => {
+    getVersion()
+      .then((version) => setAppVersion(version))
+      .catch(() => setAppVersion("-"));
+  }, []);
+
+  useEffect(() => {
+    void refreshUsageStats(recordings);
+  }, [recordings]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -1783,28 +1860,34 @@ function MainApp() {
     { key: "dictionary", label: t("navDictionary"), icon: BookText },
     { key: "cloud", label: t("settingsSectionCloud"), icon: Sparkles },
   ];
-  const dailyInputStats = useMemo(() => buildDemoDailyInputStats(), []);
-  const dailyInputToday = dailyInputStats[dailyInputStats.length - 1]?.chars ?? 0;
-  const dailyInputAvg = Math.round(
-    dailyInputStats.reduce((acc, item) => acc + item.chars, 0) / Math.max(1, dailyInputStats.length)
-  );
   const dailyInputChartData = useMemo(
     () => ({
-      labels: dailyInputStats.map((item) => item.dateLabel),
+      labels: usageStats.dailyPoints.map((item) => item.dateLabel),
       datasets: [
         {
           label: t("statsDailyInputTitle"),
-          data: dailyInputStats.map((item) => item.chars),
+          data: usageStats.dailyPoints.map((item) => item.chars),
           borderColor: "rgb(37, 99, 235)",
-          backgroundColor: "rgba(37, 99, 235, 0.16)",
-          tension: 0.3,
+          backgroundColor: (context: any) => {
+            const chart = context.chart;
+            const { ctx, chartArea } = chart;
+            if (!chartArea) {
+              return "rgba(37, 99, 235, 0.24)";
+            }
+            const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            gradient.addColorStop(0, "rgba(37, 99, 235, 0.30)");
+            gradient.addColorStop(1, "rgba(37, 99, 235, 0.04)");
+            return gradient;
+          },
+          tension: 0.35,
           fill: true,
-          pointRadius: 2.5,
+          pointRadius: 2,
           pointHoverRadius: 4,
+          borderWidth: 2.5,
         },
       ],
     }),
-    [dailyInputStats, t]
+    [usageStats.dailyPoints, t]
   );
   const dailyInputChartOptions = useMemo(
     () => ({
@@ -1828,7 +1911,7 @@ function MainApp() {
           ticks: {
             maxRotation: 0,
             color: "#64748b",
-            font: { size: 11 },
+            font: { size: 10 },
           },
         },
         y: {
@@ -1838,7 +1921,7 @@ function MainApp() {
           },
           ticks: {
             color: "#64748b",
-            font: { size: 11 },
+            font: { size: 10 },
           },
         },
       },
@@ -1905,21 +1988,80 @@ function MainApp() {
 
         <section className="tm-main min-h-0 overflow-y-auto rounded-2xl bg-white/95 p-4 md:p-5">
           {page === "home" && (
-            <div className="grid min-h-full gap-4 md:grid-rows-[auto_auto_auto_1fr]">
-              <header className="flex flex-wrap items-center justify-between gap-3">
+            <div className="grid min-h-full gap-4 md:grid-rows-[auto_auto_1fr]">
+              <header className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h1 className="text-3xl font-semibold tracking-tight">{t("titleHome")}</h1>
                   <p className="mt-1 text-sm text-slate-500">{t("subHome")}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge className="bg-slate-100 text-slate-700 border-slate-200">{t("featureOpenSource")}</Badge>
-                    <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">{t("featureOfflineFirst")}</Badge>
-                    <Badge className="bg-sky-100 text-sky-700 border-sky-200">{t("featureByod")}</Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge className={cn(badgeClass(modelReady))}>
+                    {modelReady ? t("modelReady") : initStatus.running ? t("modelInitializing") : t("modelNotReady")}
+                  </Badge>
+                  <Badge className="border-slate-200 bg-slate-100 text-slate-700">
+                    {t("statsVersion")}: v{appVersion}
+                  </Badge>
+                </div>
+              </header>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <Card className="p-3">
+                  <div className="text-xs text-slate-500">{t("statsToday")}</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{usageStats.todayChars.toLocaleString()}</div>
+                  <div className="text-xs text-slate-500">{t("statsUnitChars")}</div>
+                </Card>
+                <Card className="p-3">
+                  <div className="text-xs text-slate-500">{t("statsDailyAvg")}</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{usageStats.dailyAvgChars.toLocaleString()}</div>
+                  <div className="text-xs text-slate-500">{t("statsUnitChars")}</div>
+                </Card>
+                <Card className="p-3">
+                  <div className="text-xs text-slate-500">{t("statsMonthTotal")}</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{usageStats.monthChars.toLocaleString()}</div>
+                  <div className="text-xs text-slate-500">{t("statsUnitChars")}</div>
+                </Card>
+                <Card className="p-3">
+                  <div className="text-xs text-slate-500">{t("statsYearTotal")}</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{usageStats.yearChars.toLocaleString()}</div>
+                  <div className="text-xs text-slate-500">{t("statsUnitChars")}</div>
+                </Card>
+                <Card className="p-3">
+                  <div className="text-xs text-slate-500">{t("statsTotal")}</div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{usageStats.totalChars.toLocaleString()}</div>
+                  <div className="text-xs text-slate-500">{t("statsUnitChars")}</div>
+                </Card>
+              </div>
+
+              <Card className="p-4">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">{t("statsDailyInputTitle")}</div>
+                    <p className="mt-1 text-sm text-slate-600">{t("statsDailyInputDesc")}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      className={cn(
+                        "h-10 rounded-lg px-3 inline-flex items-center gap-2 shadow-sm",
+                        isRecording
+                          ? "bg-red-600 hover:bg-red-700 border-red-600 hover:border-red-700"
+                          : "bg-slate-900 hover:bg-slate-800 border-slate-900 hover:border-slate-800"
+                      )}
+                      onClick={onRecordClick}
+                      disabled={isBusy || initStatus.running}
+                    >
+                      <Mic size={14} />
+                      {isRecording ? t("stopRecording") : t("startRecording")}
+                    </Button>
+                    <Button variant="outline" className="h-10" onClick={onInitModel} disabled={isBusy || initStatus.running}>
+                      {initStatus.running ? <Loader2 className="animate-spin" size={14} /> : <Sparkles size={14} />}
+                      {initStatus.running ? t("initModelRunning") : modelReady ? t("initModelReady") : t("initModelStart")}
+                    </Button>
                   </div>
                 </div>
-                <Badge className={cn(badgeClass(modelReady))}>
-                  {modelReady ? t("modelReady") : initStatus.running ? t("modelInitializing") : t("modelNotReady")}
-                </Badge>
-              </header>
+                <div className="h-[340px] w-full">
+                  <Line data={dailyInputChartData} options={dailyInputChartOptions} />
+                </div>
+              </Card>
 
               {accessibility.supported && !accessibility.trusted && (
                 <Card className="p-4">
@@ -1943,108 +2085,6 @@ function MainApp() {
                   </div>
                 </Card>
               )}
-
-              {(!modelReady || initStatus.running) && (
-                <Card className="p-4">
-                  <div className="mb-4 flex flex-wrap items-center gap-2">
-                    <Button
-                      className={cn(
-                        "h-11 rounded-xl px-4 inline-flex items-center gap-2 shadow-sm",
-                        isRecording
-                          ? "bg-red-600 hover:bg-red-700 border-red-600 hover:border-red-700"
-                          : "bg-slate-900 hover:bg-slate-800 border-slate-900 hover:border-slate-800"
-                      )}
-                      onClick={onRecordClick}
-                      disabled={isBusy || initStatus.running}
-                    >
-                      <Mic size={16} />
-                      <span className={cn("inline-block h-2 w-2 rounded-full bg-white/90", isRecording ? "animate-pulse" : "opacity-70")} />
-                      {isRecording ? t("stopRecording") : t("startRecording")}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="inline-flex items-center gap-2"
-                      onClick={onInitModel}
-                      disabled={isBusy || initStatus.running}
-                    >
-                      {initStatus.running ? <Loader2 className="animate-spin" size={15} /> : <Sparkles size={15} />}
-                      {initStatus.running ? t("initModelRunning") : modelReady ? t("initModelReady") : t("initModelStart")}
-                    </Button>
-                    <Button variant="outline" onClick={() => setPage("history")}>{t("viewHistory")}</Button>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-sm text-slate-700 tabular-nums whitespace-nowrap overflow-hidden text-ellipsis">
-                      {localizedInitMessage(initStatus, uiLang)}
-                    </div>
-                    <Progress value={Math.min(100, Math.max(0, initStatus.progress))} />
-                    {initStatus.error && <div className="text-xs text-red-600">{initStatus.error}</div>}
-                  </div>
-
-                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-xs text-slate-600">
-                    <div>{t("settingsHotkeyDictation")}: <span className="font-semibold text-slate-800">{hotkeyDictation || "-"}</span></div>
-                    <div className="mt-1">{t("settingsHotkeyTranslation")}: <span className="font-semibold text-slate-800">{hotkeyTranslation || "-"}</span></div>
-                    <div className="mt-1">{t("settingsTriggerMode")}: <span className="font-semibold text-slate-800">{triggerMode === "tap" ? t("settingsTriggerModeTap") : t("settingsTriggerModeLongPress")}</span></div>
-                    <div className="mt-1">{t("settingsOutputMode")}: <span className="font-semibold text-slate-800">{outputMode === "auto-paste" ? t("settingsOutputModeAutoPaste") : outputMode === "paste-and-keep" ? t("settingsOutputModePasteAndKeep") : t("settingsOutputModeCopyOnly")}</span></div>
-                  </div>
-                </Card>
-              )}
-
-              <Card className="p-4">
-                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="text-lg font-semibold text-slate-900">{t("statsDailyInputTitle")}</div>
-                    <p className="mt-1 text-sm text-slate-600">{t("statsDailyInputDesc")}</p>
-                  </div>
-                  <div className="flex gap-2 text-xs">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
-                      <div className="text-slate-500">{t("statsToday")}</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">
-                        {dailyInputToday} {t("statsUnitChars")}
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
-                      <div className="text-slate-500">{t("statsDailyAvg")}</div>
-                      <div className="mt-1 text-sm font-semibold text-slate-900">
-                        {dailyInputAvg} {t("statsUnitChars")}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="h-[220px] w-full">
-                  <Line data={dailyInputChartData} options={dailyInputChartOptions} />
-                </div>
-              </Card>
-
-              <Card className="min-h-0 overflow-hidden">
-                <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                  <div className="text-sm font-semibold text-slate-700">{t("recentRecordings")}</div>
-                  <div className="text-xs text-slate-500">{t("countItems", { count: recordings.length })}</div>
-                </div>
-                <ScrollArea className="h-full" viewportClassName="h-full p-3">
-                  <div className="space-y-2">
-                    {recordings.slice(0, 8).map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
-                        onClick={() => {
-                          setSelectedId(item.id);
-                          setPage("history");
-                        }}
-                      >
-                        <div className="text-sm font-medium text-slate-800">{item.name}</div>
-                        <div className="mt-1 text-xs text-slate-500">{formatListTime(item.createdAtMs)}</div>
-                      </button>
-                    ))}
-                    {recordings.length === 0 && (
-                      <div className="rounded-xl border border-dashed border-slate-300 px-3 py-6 text-center text-sm text-slate-500">
-                        {t("noRecordings")}
-                      </div>
-                    )}
-                  </div>
-                </ScrollArea>
-              </Card>
             </div>
           )}
 
