@@ -33,6 +33,10 @@ const OVERLAY_EVENT: &str = "overlay-state";
 const RECORDING_SAVED_EVENT: &str = "recording-saved";
 const HOTKEY_TOGGLE_DICTATION: &str = "";
 const HOTKEY_TOGGLE_TRANSLATION: &str = "";
+const LEGACY_HOTKEY_DICTATION_V1: &str = "CommandOrControl+Alt+Space";
+const LEGACY_HOTKEY_TRANSLATION_V1: &str = "CommandOrControl+Alt+Enter";
+const LEGACY_HOTKEY_DICTATION_V2: &str = "CommandOrControl+Shift+S";
+const LEGACY_HOTKEY_TRANSLATION_V2: &str = "CommandOrControl+Alt+Enter";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const OVERLAY_WIDTH: f64 = 210.0;
 const OVERLAY_HEIGHT: f64 = 25.0;
@@ -631,10 +635,7 @@ fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfi
 
     let dictation_set = !dictation.is_empty();
     let translation_set = !translation.is_empty();
-    if dictation_set != translation_set {
-        return Err("dictation and translation hotkeys must both be set or both empty".into());
-    }
-    if dictation_set && dictation == translation {
+    if dictation_set && translation_set && dictation == translation {
         return Err("dictation and translation hotkeys must be different".into());
     }
 
@@ -661,6 +662,11 @@ fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfi
         translation: translation.to_string(),
         translation_id,
     })
+}
+
+fn is_legacy_default_hotkeys(dictation: &str, translation: &str) -> bool {
+    (dictation == LEGACY_HOTKEY_DICTATION_V1 && translation == LEGACY_HOTKEY_TRANSLATION_V1)
+        || (dictation == LEGACY_HOTKEY_DICTATION_V2 && translation == LEGACY_HOTKEY_TRANSLATION_V2)
 }
 
 fn apply_hotkey_shortcuts(
@@ -3133,7 +3139,16 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let persisted = load_persisted_hotkeys(app.handle())?;
+            let mut persisted = load_persisted_hotkeys(app.handle())?;
+            if let Some(saved) = persisted.as_mut() {
+                if is_legacy_default_hotkeys(saved.dictation.trim(), saved.translation.trim()) {
+                    eprintln!(
+                        "[typemore] migrate legacy built-in hotkeys to empty defaults (Fn-only)"
+                    );
+                    saved.dictation.clear();
+                    saved.translation.clear();
+                }
+            }
             let persisted_cloud = load_persisted_cloud_settings(app.handle()).unwrap_or_else(|err| {
                 eprintln!("[typemore] failed to load cloud settings: {}", err);
                 None

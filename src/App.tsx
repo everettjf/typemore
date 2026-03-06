@@ -255,7 +255,7 @@ const I18N = {
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
     settingsHotkeyTitle: "全局快捷键",
     settingsHotkeyDesc: "支持点按切换（按一次开始/停止）和长按模式（按下开始、松开停止）。",
-    settingsHotkeyBuiltInHint: "留空可关闭内置快捷键（仅使用 Fn 快捷键）。如需启用，请同时设置听写与翻译两个快捷键。",
+    settingsHotkeyBuiltInHint: "内置快捷键可留空（仅使用 Fn / Fn+Shift）。也可按需单独设置听写或翻译快捷键。",
     settingsHotkeyDictation: "听写快捷键",
     settingsHotkeyTranslation: "翻译快捷键",
     settingsFnKeyToggle: "启用 Fn 单键切换录音（macOS）",
@@ -279,7 +279,6 @@ const I18N = {
     settingsHotkeyConflictSame: "听写快捷键与翻译快捷键不能相同。",
     settingsHotkeyConflictWithSystem: "与系统常用快捷键冲突：{value}",
     settingsHotkeyWarningSaveBlocked: "请先修复冲突再保存。",
-    settingsHotkeyRequirePair: "内置快捷键需同时设置听写和翻译，或两个都留空。",
     settingsTranslationTarget: "翻译目标语言",
     settingsTranslationTargetAuto: "自动（中英互转）",
     settingsTranslationTargetEn: "英文",
@@ -417,7 +416,7 @@ const I18N = {
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
     settingsHotkeyTitle: "Global Hotkey",
     settingsHotkeyDesc: "Supports tap-toggle and long-press mode (press to start, release to stop).",
-    settingsHotkeyBuiltInHint: "Leave empty to disable built-in shortcuts and use Fn only. To enable built-in shortcuts, set both dictation and translation.",
+    settingsHotkeyBuiltInHint: "Built-in shortcuts can stay empty (Fn / Fn+Shift only), or you can set dictation/translation shortcuts individually.",
     settingsHotkeyDictation: "Dictation hotkey",
     settingsHotkeyTranslation: "Translation hotkey",
     settingsFnKeyToggle: "Enable Fn one-key dictation toggle (macOS)",
@@ -441,7 +440,6 @@ const I18N = {
     settingsHotkeyConflictSame: "Dictation and translation hotkeys must be different.",
     settingsHotkeyConflictWithSystem: "Conflicts with common system shortcut: {value}",
     settingsHotkeyWarningSaveBlocked: "Resolve conflicts before saving.",
-    settingsHotkeyRequirePair: "Built-in shortcuts require both dictation and translation, or leave both empty.",
     settingsTranslationTarget: "Translation target",
     settingsTranslationTargetAuto: "Auto (ZH <-> EN)",
     settingsTranslationTargetEn: "English",
@@ -1569,11 +1567,6 @@ function MainApp() {
   async function onSaveHotkeys() {
     const dictation = hotkeyDictation.trim();
     const translation = hotkeyTranslation.trim();
-    const hasOnlyOne = Boolean(dictation) !== Boolean(translation);
-    if (hasOnlyOne) {
-      setTranscript(t("settingsHotkeyRequirePair"));
-      return;
-    }
     if (hasHotkeyConflicts) {
       if (hasHotkeyConflicts) {
         setTranscript(t("settingsHotkeyWarningSaveBlocked"));
