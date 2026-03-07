@@ -5,9 +5,70 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Type More</title>
+    <style>
+      html, body, #root {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(1200px 460px at -12% -8%, #d9ebff 0%, transparent 60%),
+          radial-gradient(860px 420px at 110% 0%, #d2f3ff 0%, transparent 55%),
+          linear-gradient(145deg, #f3f8ff 0%, #f8fbff 48%, #ecf6ff 100%);
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(1200px 460px at -12% -8%, #d9ebff 0%, transparent 60%),
+          radial-gradient(860px 420px at 110% 0%, #d2f3ff 0%, transparent 55%),
+          linear-gradient(145deg, #f3f8ff 0%, #f8fbff 48%, #ecf6ff 100%);
+        transition: opacity 180ms ease;
+      }
+      #boot-splash.tm-hide {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .tm-boot-card {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 18px;
+        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 12px 36px rgba(15, 23, 42, 0.1);
+        color: #0f172a;
+        font-family: "Avenir Next", "SF Pro Rounded", "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+      }
+      .tm-boot-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 9999px;
+        background: #1d4ed8;
+        box-shadow: 0 0 0 0 rgba(29, 78, 216, 0.28);
+        animation: tm-pulse 1.1s ease-in-out infinite;
+      }
+      @keyframes tm-pulse {
+        0% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(29, 78, 216, 0.28); }
+        70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(29, 78, 216, 0); }
+        100% { transform: scale(0.92); box-shadow: 0 0 0 0 rgba(29, 78, 216, 0); }
+      }
+    </style>
   </head>
 
   <body>
+    <div id="boot-splash" aria-hidden="true">
+      <div class="tm-boot-card">
+        <img src="/favicon.png" alt="" width="20" height="20" />
+        <strong>Type More</strong>
+        <span class="tm-boot-dot"></span>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

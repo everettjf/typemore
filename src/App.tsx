@@ -45,7 +45,7 @@ import { cn } from "./lib/utils";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
-type Page = "home" | "history" | "dictionary" | "cloud";
+type Page = "home" | "history" | "dictionary" | "cloud" | "test";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
 type CaptureTarget = "dictation" | "translation" | null;
@@ -209,6 +209,7 @@ const I18N = {
     navHome: "首页",
     navHistory: "历史",
     navDictionary: "词库",
+    navTestInput: "测试输入",
     navSettings: "设置",
     titleHome: "用你的声音，打出更多文字。",
     subHome: "开源、离线优先，支持 BYOD（Bring Your Own Key）的语音转写工作流。",
@@ -252,6 +253,8 @@ const I18N = {
     modelInitPhaseScan: "校验模型完整性",
     modelInitPhaseDone: "初始化完成",
     statsEmptyQuickTestTitle: "快速测试输入",
+    testInputTitle: "测试输入",
+    testInputDesc: "聚焦输入框后按 Fn（或 Fn+Shift）即可体验识别后的自动输入效果。",
     viewHistory: "查看历史",
     recentRecordings: "最近录音",
     noRecordings: "还没有录音记录，先初始化模型并开始录音。",
@@ -352,11 +355,13 @@ const I18N = {
     settingsCloudProviderEnabled: "启用",
     settingsCloudAddProvider: "新增厂商",
     settingsCloudRemoveProvider: "删除",
-    settingsCloudSave: "保存云端设置",
+    settingsCloudSave: "保存",
     settingsCloudTest: "测试连接",
     settingsCloudTesting: "测试中...",
     settingsCloudTestOk: "连接成功",
     settingsCloudTestFailed: "连接失败",
+    toastSaved: "保存成功",
+    toastSaveFailed: "保存失败: {error}",
     settingsCloudNoProviderHint: "暂无可用模型。请先到“模型厂商”新增并保存，再返回这里选择。",
     settingsProvidersTitle: "模型厂商",
     settingsProvidersDesc: "每条配置是一个可调用模型（厂商 + 模型）。优化/翻译会从这里选择。",
@@ -400,6 +405,7 @@ const I18N = {
     navHome: "Home",
     navHistory: "History",
     navDictionary: "Dictionary",
+    navTestInput: "Test Input",
     navSettings: "Settings",
     titleHome: "Type More with your voice.",
     subHome: "Open-source and offline-first voice transcription workflow with BYOD (Bring Your Own Key).",
@@ -443,6 +449,8 @@ const I18N = {
     modelInitPhaseScan: "Validating model files",
     modelInitPhaseDone: "Initialization complete",
     statsEmptyQuickTestTitle: "Quick test input",
+    testInputTitle: "Test Input",
+    testInputDesc: "Focus the text area and press Fn (or Fn+Shift) to test end-to-end typing.",
     viewHistory: "View History",
     recentRecordings: "Recent Recordings",
     noRecordings: "No recordings yet. Initialize the model and start recording.",
@@ -543,11 +551,13 @@ const I18N = {
     settingsCloudProviderEnabled: "Enabled",
     settingsCloudAddProvider: "Add provider",
     settingsCloudRemoveProvider: "Remove",
-    settingsCloudSave: "Save cloud settings",
+    settingsCloudSave: "Save",
     settingsCloudTest: "Test connection",
     settingsCloudTesting: "Testing...",
     settingsCloudTestOk: "Connection OK",
     settingsCloudTestFailed: "Connection failed",
+    toastSaved: "Saved",
+    toastSaveFailed: "Save failed: {error}",
     settingsCloudNoProviderHint: "No models configured yet. Go to “Model Providers” and add one first.",
     settingsProvidersTitle: "Model Providers",
     settingsProvidersDesc: "Each entry is one callable model (vendor + model). Optimize/Translate selects from this list.",
@@ -836,6 +846,7 @@ function MainApp() {
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
   const [providerTestResults, setProviderTestResults] = useState<Record<string, { ok: boolean; message: string }>>({});
   const [savingHotkeys, setSavingHotkeys] = useState(false);
+  const [toast, setToast] = useState<{ message: string; kind: "success" | "error" } | null>(null);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
   const [historyMenuId, setHistoryMenuId] = useState<string | null>(null);
@@ -868,6 +879,7 @@ function MainApp() {
   const overlayLevelTimerRef = useRef<number | null>(null);
   const lastOverlayLevelSentAtRef = useRef(0);
   const lastOverlayLevelRef = useRef(0);
+  const toastTimerRef = useRef<number | null>(null);
 
   const selected = useMemo(
     () => recordings.find((item) => item.id === selectedId) ?? null,
@@ -1233,7 +1245,22 @@ function MainApp() {
 
   useEffect(() => () => {
     stopOverlayLevelMeter();
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
   }, []);
+
+  function showToast(message: string, kind: "success" | "error" = "success") {
+    setToast({ message, kind });
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 2200);
+  }
 
   useEffect(() => {
     if (!historyMenuId) {
@@ -1950,8 +1977,10 @@ function MainApp() {
       const payload = buildCloudSettingsPayload(cloudSettings);
       const saved = await invoke<CloudSettings>("set_cloud_settings", { settings: payload });
       setCloudSettings(saved);
+      showToast(t("toastSaved"), "success");
     } catch (err) {
       setTranscript(String(err));
+      showToast(t("toastSaveFailed", { error: String(err) }), "error");
     } finally {
       setSavingCloudSettings(false);
     }
@@ -2011,6 +2040,7 @@ function MainApp() {
     { key: "history", label: t("navHistory"), icon: History },
     { key: "dictionary", label: t("navDictionary"), icon: BookText },
     { key: "cloud", label: t("settingsSectionCloud"), icon: Sparkles },
+    { key: "test", label: t("navTestInput"), icon: Pencil },
   ];
   const dailyInputChartData = useMemo(
     () => ({
@@ -2235,22 +2265,13 @@ function MainApp() {
                             </Button>
                           )}
                         </div>
-                        <div className="mx-auto mt-4 grid w-full max-w-[820px] gap-3 text-left md:grid-cols-[0.95fr_1.25fr]">
+                        <div className="mx-auto mt-4 w-full max-w-[780px] text-left">
                           <div className="rounded-xl border border-slate-200 bg-white/95 p-4 shadow-sm">
                             <div className="text-sm font-semibold text-slate-800">{t("statsEmptyGuideTitle")}</div>
                             <p className="mt-2 text-xs leading-6 text-slate-500">{t("statsEmptyGuideDesc")}</p>
                             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
                               {t("statsEmptyTryHint")}
                             </div>
-                          </div>
-                          <div className="rounded-xl border border-slate-200 bg-white/95 p-3 shadow-sm">
-                            <div className="text-sm font-semibold text-slate-800">{t("statsEmptyQuickTestTitle")}</div>
-                            <Textarea
-                              className="mt-2 min-h-[112px] w-full resize-none border-slate-200 bg-white"
-                              value={homeTryText}
-                              onChange={(event) => setHomeTryText(event.target.value)}
-                              placeholder={t("statsEmptyInputPlaceholder")}
-                            />
                           </div>
                         </div>
                       </div>
@@ -2600,6 +2621,34 @@ function MainApp() {
                       {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
                       {t("settingsCloudSave")}
                     </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {page === "test" && (
+            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_1fr]">
+              <header className="flex items-center justify-between">
+                <h2 className="text-3xl font-semibold tracking-tight">{t("testInputTitle")}</h2>
+              </header>
+
+              <Card className="p-4">
+                <p className="text-sm text-slate-600">{t("testInputDesc")}</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-[0.95fr_1.25fr]">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+                    <div className="text-sm font-semibold text-slate-800">{t("statsEmptyGuideTitle")}</div>
+                    <p className="mt-2 text-sm leading-7 text-slate-600">{t("statsEmptyGuideDesc")}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="text-sm font-semibold text-slate-800">{t("statsEmptyQuickTestTitle")}</div>
+                    <Textarea
+                      className="mt-2 min-h-[220px] w-full resize-none border-slate-200 bg-white"
+                      value={homeTryText}
+                      onChange={(event) => setHomeTryText(event.target.value)}
+                      placeholder={t("statsEmptyInputPlaceholder")}
+                    />
+                    <p className="mt-2 text-xs text-slate-500">{t("statsEmptyTryHint")}</p>
                   </div>
                 </div>
               </Card>
@@ -3195,6 +3244,21 @@ function MainApp() {
             </div>
             <div className="mt-3 text-xs text-slate-500">{t("modelInitModalKeepTip")}</div>
           </Card>
+        </div>
+      )}
+
+      {toast && (
+        <div className="pointer-events-none fixed bottom-5 right-5 z-[70]">
+          <div
+            className={cn(
+              "rounded-lg px-3 py-2 text-sm shadow-lg",
+              toast.kind === "success"
+                ? "border border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border border-rose-200 bg-rose-50 text-rose-800"
+            )}
+          >
+            {toast.message}
+          </div>
         </div>
       )}
 

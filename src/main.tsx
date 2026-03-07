@@ -8,3 +8,11 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
+
+const splash = document.getElementById("boot-splash");
+if (splash) {
+  window.requestAnimationFrame(() => {
+    splash.classList.add("tm-hide");
+    window.setTimeout(() => splash.remove(), 220);
+  });
+}
