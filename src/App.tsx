@@ -228,6 +228,8 @@ const I18N = {
     statsEmptyDesc: "首次使用时，先进行一次录音识别。识别后这里会自动展示真实趋势与统计。",
     statsEmptyInitModel: "初始化模型",
     statsEmptyTryNow: "立即测试",
+    statsEmptyGuideTitle: "首次使用指引",
+    statsEmptyGuideDesc: "1. 初始化模型  2. 聚焦输入框  3. 按 Fn（或 Fn+Shift）开始语音输入",
     statsEmptyTryHint: "点击输入框后按 Fn（或 Fn+Shift）开始测试。",
     statsEmptyInputPlaceholder: "这里是测试输入区，识别结果会自动粘贴到当前焦点位置。",
     updateAvailableTitle: "发现新版本",
@@ -278,7 +280,7 @@ const I18N = {
     settingsSectionGeneral: "通用",
     settingsSectionLanguage: "语言",
     settingsSectionHotkey: "快捷键",
-    settingsSectionCloud: "云端处理",
+    settingsSectionCloud: "处理",
     settingsSectionProviders: "模型厂商",
     settingsSectionTemp: "临时目录",
     settingsSectionAbout: "关于",
@@ -324,7 +326,7 @@ const I18N = {
     settingsTranslationTargetZh: "中文",
     settingsTranslationTargetJa: "日文",
     settingsTranslationTargetKo: "韩文",
-    settingsCloudTitle: "云端处理",
+    settingsCloudTitle: "处理",
     settingsCloudDesc: "将本地识别结果交给云端做二次优化与翻译。建议先在“模型厂商”里配置可用模型。",
     settingsCloudGuide: "处理顺序：本地识别 -> 云端优化 -> (翻译快捷键时) 云端翻译。任一步失败会自动回退到上一步结果。",
     settingsCloudEnabled: "启用云端后处理",
@@ -352,6 +354,9 @@ const I18N = {
     settingsCloudRemoveProvider: "删除",
     settingsCloudSave: "保存云端设置",
     settingsCloudTest: "测试连接",
+    settingsCloudTesting: "测试中...",
+    settingsCloudTestOk: "连接成功",
+    settingsCloudTestFailed: "连接失败",
     settingsCloudNoProviderHint: "暂无可用模型。请先到“模型厂商”新增并保存，再返回这里选择。",
     settingsProvidersTitle: "模型厂商",
     settingsProvidersDesc: "每条配置是一个可调用模型（厂商 + 模型）。优化/翻译会从这里选择。",
@@ -414,6 +419,8 @@ const I18N = {
     statsEmptyDesc: "Run your first transcription and this page will automatically show real trends and usage statistics.",
     statsEmptyInitModel: "Initialize model",
     statsEmptyTryNow: "Try now",
+    statsEmptyGuideTitle: "First-run checklist",
+    statsEmptyGuideDesc: "1. Initialize model  2. Focus an input  3. Press Fn (or Fn+Shift) to start dictation",
     statsEmptyTryHint: "Focus the input and press Fn (or Fn+Shift) to test.",
     statsEmptyInputPlaceholder: "Test input area. Recognized text will paste to the focused control.",
     updateAvailableTitle: "New version available",
@@ -464,7 +471,7 @@ const I18N = {
     settingsSectionGeneral: "General",
     settingsSectionLanguage: "Language",
     settingsSectionHotkey: "Hotkeys",
-    settingsSectionCloud: "Cloud Processing",
+    settingsSectionCloud: "Processing",
     settingsSectionProviders: "Model Providers",
     settingsSectionTemp: "Temporary Directory",
     settingsSectionAbout: "About",
@@ -510,7 +517,7 @@ const I18N = {
     settingsTranslationTargetZh: "Chinese",
     settingsTranslationTargetJa: "Japanese",
     settingsTranslationTargetKo: "Korean",
-    settingsCloudTitle: "Cloud Processing",
+    settingsCloudTitle: "Processing",
     settingsCloudDesc: "Send local ASR output to cloud for optimization and translation. Configure models in “Model Providers” first.",
     settingsCloudGuide: "Pipeline: Local ASR -> Cloud optimize -> (translation hotkey) Cloud translate. It falls back automatically on failures.",
     settingsCloudEnabled: "Enable cloud post-processing",
@@ -538,6 +545,9 @@ const I18N = {
     settingsCloudRemoveProvider: "Remove",
     settingsCloudSave: "Save cloud settings",
     settingsCloudTest: "Test connection",
+    settingsCloudTesting: "Testing...",
+    settingsCloudTestOk: "Connection OK",
+    settingsCloudTestFailed: "Connection failed",
     settingsCloudNoProviderHint: "No models configured yet. Go to “Model Providers” and add one first.",
     settingsProvidersTitle: "Model Providers",
     settingsProvidersDesc: "Each entry is one callable model (vendor + model). Optimize/Translate selects from this list.",
@@ -754,41 +764,41 @@ function OverlayWindowApp() {
     <main className="h-screen w-screen bg-transparent p-0">
       <div
         className={cn(
-          "h-full w-full overflow-hidden rounded-lg border border-white/20 bg-black/90 px-2 text-white shadow-2xl transition-opacity duration-300",
+          "h-full w-full overflow-hidden rounded-[16px] border border-white/18 bg-black/88 px-3 text-white shadow-[0_10px_28px_rgba(0,0,0,0.45)] transition-opacity duration-300",
           phase === "ready" ? "opacity-95" : "opacity-100"
         )}
       >
         <div className="flex h-full items-center justify-between gap-3">
           <div
             className={cn(
-              "text-xs font-semibold tracking-tight leading-none transition-colors duration-100",
+              "text-sm font-semibold tracking-tight leading-none transition-colors duration-100",
               phase === "listening" && speakingActive ? "text-emerald-200" : "text-white"
             )}
           >
             {title}
           </div>
           {phase === "listening" ? (
-            <div className="flex h-4 items-end gap-1">
+            <div className="flex h-4 items-end gap-1.5">
               {[0.55, 0.8, 1, 0.82, 0.58].map((factor, index) => {
                 const active = Math.max(0.1, Math.min(1, level * 1.2 * factor));
                 return (
                   <span
                     key={index}
                     className={cn(
-                      "w-1 rounded-full transition-all duration-75",
-                      active > 0.2 ? "bg-emerald-300" : "bg-white"
+                      "w-1.5 rounded-full transition-all duration-75",
+                      active > 0.2 ? "bg-white" : "bg-white/60"
                     )}
                     style={{
-                      height: `${6 + index}px`,
+                      height: `${7 + index * 1.1}px`,
                       opacity: 0.5 + active * 0.5,
-                      boxShadow: active > 0.2 ? "0 0 6px rgba(110, 231, 183, 0.45)" : "none",
+                      boxShadow: active > 0.2 ? "0 0 8px rgba(255, 255, 255, 0.25)" : "none",
                     }}
                   />
                 );
               })}
             </div>
           ) : (
-            text && <div className="truncate text-[10px] text-white/80">{text}</div>
+            text && <div className="truncate text-xs text-white/80">{text}</div>
           )}
         </div>
       </div>
@@ -823,6 +833,8 @@ function MainApp() {
   const [translationTargetLang, setTranslationTargetLang] = useState<TranslationTargetLang>("auto");
   const [cloudSettings, setCloudSettings] = useState<CloudSettings>(defaultCloudSettings);
   const [savingCloudSettings, setSavingCloudSettings] = useState(false);
+  const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+  const [providerTestResults, setProviderTestResults] = useState<Record<string, { ok: boolean; message: string }>>({});
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
   const [fallbackText, setFallbackText] = useState<string | null>(null);
@@ -832,8 +844,6 @@ function MainApp() {
   const [appVersion, setAppVersion] = useState("-");
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [homeTryText, setHomeTryText] = useState("");
-  const [inlineOverlay, setInlineOverlay] = useState<OverlayStatePayload>({ phase: "hidden", text: "" });
-  const [mainFocused, setMainFocused] = useState(() => document.hasFocus());
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -863,7 +873,6 @@ function MainApp() {
     () => recordings.find((item) => item.id === selectedId) ?? null,
     [recordings, selectedId]
   );
-  const showInlineOverlay = mainFocused && inlineOverlay.phase !== "hidden";
   const allHistorySelected = recordings.length > 0 && historySelectedIds.length === recordings.length;
 
   const modelReady = initStatus.ready;
@@ -1249,7 +1258,6 @@ function MainApp() {
     let unlistenInit: (() => void) | undefined;
     let unlistenHotkey: (() => void) | undefined;
     let unlistenRecordingSaved: (() => void) | undefined;
-    let unlistenOverlay: (() => void) | undefined;
 
     listen<ModelInitStatus>("model-init-progress", (event) => {
       setInitStatus(event.payload);
@@ -1282,18 +1290,6 @@ function MainApp() {
       })
       .catch(() => {});
 
-    listen<OverlayStatePayload>("overlay-state", (event) => {
-      setInlineOverlay({
-        phase: event.payload.phase,
-        text: event.payload.text ?? "",
-        level: event.payload.level ?? 0,
-      });
-    })
-      .then((fn) => {
-        unlistenOverlay = fn;
-      })
-      .catch(() => {});
-
     return () => {
       if (unlistenInit) {
         unlistenInit();
@@ -1304,22 +1300,8 @@ function MainApp() {
       if (unlistenRecordingSaved) {
         unlistenRecordingSaved();
       }
-      if (unlistenOverlay) {
-        unlistenOverlay();
-      }
     };
   }, [t]);
-
-  useEffect(() => {
-    const onFocus = () => setMainFocused(true);
-    const onBlur = () => setMainFocused(false);
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("blur", onBlur);
-    };
-  }, []);
 
   useEffect(() => {
     getVersion()
@@ -1792,23 +1774,6 @@ function MainApp() {
     setLatestVersion(null);
   }
 
-  async function onInlineOverlayConfirm() {
-    try {
-      await invoke("native_hotkey_confirm");
-    } catch {
-      // ignore
-    }
-  }
-
-  async function onInlineOverlayCancel() {
-    try {
-      await invoke("native_hotkey_cancel");
-      setInlineOverlay({ phase: "hidden", text: "" });
-    } catch {
-      // ignore
-    }
-  }
-
   async function onSaveHotkeys() {
     const dictation = hotkeyDictation.trim();
     const translation = hotkeyTranslation.trim();
@@ -1956,29 +1921,33 @@ function MainApp() {
     });
   }
 
+  function buildCloudSettingsPayload(source: CloudSettings): CloudSettings {
+    const providers = source.providers.map((provider, index) => ({
+      ...provider,
+      id: provider.id.trim() || makeProviderId(provider.vendor, provider.model),
+      name: buildProviderLabel(provider),
+      model: provider.model.trim(),
+      apiKey: provider.apiKey.trim(),
+      baseUrl: provider.baseUrl?.trim() || null,
+      priority: Number.isFinite(provider.priority) ? provider.priority : index,
+    }));
+    return {
+      providers,
+      pipeline: {
+        ...source.pipeline,
+        targetLanguage: source.pipeline.targetLanguage.trim() || "en",
+        optimizePrompt: source.pipeline.optimizePrompt.trim(),
+        translatePrompt: source.pipeline.translatePrompt.trim(),
+        timeoutMs: Math.max(1000, Math.min(120000, Number(source.pipeline.timeoutMs) || 10000)),
+        maxRetries: Math.max(0, Math.min(4, Number(source.pipeline.maxRetries) || 0)),
+      },
+    };
+  }
+
   async function onSaveCloudSettings() {
     setSavingCloudSettings(true);
     try {
-      const providers = cloudSettings.providers.map((provider, index) => ({
-        ...provider,
-        id: provider.id.trim() || makeProviderId(provider.vendor, provider.model),
-        name: buildProviderLabel(provider),
-        model: provider.model.trim(),
-        apiKey: provider.apiKey.trim(),
-        baseUrl: provider.baseUrl?.trim() || null,
-        priority: Number.isFinite(provider.priority) ? provider.priority : index,
-      }));
-      const payload: CloudSettings = {
-        providers,
-        pipeline: {
-          ...cloudSettings.pipeline,
-          targetLanguage: cloudSettings.pipeline.targetLanguage.trim() || "en",
-          optimizePrompt: cloudSettings.pipeline.optimizePrompt.trim(),
-          translatePrompt: cloudSettings.pipeline.translatePrompt.trim(),
-          timeoutMs: Math.max(1000, Math.min(120000, Number(cloudSettings.pipeline.timeoutMs) || 10000)),
-          maxRetries: Math.max(0, Math.min(4, Number(cloudSettings.pipeline.maxRetries) || 0)),
-        },
-      };
+      const payload = buildCloudSettingsPayload(cloudSettings);
       const saved = await invoke<CloudSettings>("set_cloud_settings", { settings: payload });
       setCloudSettings(saved);
     } catch (err) {
@@ -1993,16 +1962,31 @@ function MainApp() {
   }
 
   async function onTestCloudProvider(providerId: string) {
+    setTestingProviderId(providerId);
     try {
+      const payload = buildCloudSettingsPayload(cloudSettings);
+      const saved = await invoke<CloudSettings>("set_cloud_settings", { settings: payload });
+      setCloudSettings(saved);
       const result = await invoke<TestCloudProviderResult>("test_cloud_provider", {
         input: { providerId },
       });
-      const message = result.ok
-        ? `${providerId}: ${result.message}`
-        : `${providerId}: ${result.message}`;
-      setTranscript(message);
+      setProviderTestResults((prev) => ({
+        ...prev,
+        [providerId]: {
+          ok: result.ok,
+          message: result.message,
+        },
+      }));
     } catch (err) {
-      setTranscript(String(err));
+      setProviderTestResults((prev) => ({
+        ...prev,
+        [providerId]: {
+          ok: false,
+          message: String(err),
+        },
+      }));
+    } finally {
+      setTestingProviderId(null);
     }
   }
 
@@ -2108,59 +2092,6 @@ function MainApp() {
 
   return (
     <main className="typemore-app h-screen p-0 text-slate-900">
-      {showInlineOverlay && (
-        <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2">
-          <div className="pointer-events-auto rounded-[28px] border border-slate-700/80 bg-black/92 p-1 shadow-[0_10px_28px_rgba(0,0,0,0.45)]">
-            <div className="inline-flex items-center gap-3 rounded-[22px] border border-slate-600/70 bg-gradient-to-b from-slate-900 to-black px-3 py-2 text-white">
-            {inlineOverlay.phase === "listening" && (
-              <>
-                <button
-                  type="button"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-500/80 bg-slate-900 text-slate-200 hover:bg-slate-800"
-                  onClick={() => {
-                    void onInlineOverlayCancel();
-                  }}
-                >
-                  <X size={18} />
-                </button>
-                <div className="flex h-6 items-center gap-1.5 px-1">
-                  {Array.from({ length: 10 }).map((_, index) => (
-                    <span
-                      key={index}
-                      className="w-0.5 rounded-full bg-white/90 animate-pulse"
-                      style={{
-                        height: `${5 + ((index % 5) + 1) * 2}px`,
-                        animationDuration: "1000ms",
-                        animationDelay: `${index * 55}ms`,
-                      }}
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white text-slate-900 hover:bg-slate-100"
-                  onClick={() => {
-                    void onInlineOverlayConfirm();
-                  }}
-                >
-                  <Check size={18} />
-                </button>
-              </>
-            )}
-            {inlineOverlay.phase !== "listening" && (
-              <>
-                <div className="rounded-full bg-white px-3 py-1 text-base font-semibold text-slate-900">
-                  {inlineOverlay.phase === "thinking" ? "..." : "Ready"}
-                </div>
-                <div className="max-w-[420px] truncate text-lg font-medium text-white/90">
-                  {inlineOverlay.text || (inlineOverlay.phase === "thinking" ? "Processing..." : "")}
-                </div>
-              </>
-            )}
-            </div>
-          </div>
-        </div>
-      )}
       <div className="tm-shell mx-auto grid h-full max-w-[1540px] grid-cols-1 gap-3 rounded-3xl p-3 backdrop-blur md:grid-cols-[230px_1fr] md:p-4">
         <aside className="tm-side flex min-h-0 flex-col rounded-2xl bg-white/95 p-3">
           <div className="px-2 pb-3 pt-1">
@@ -2303,21 +2234,24 @@ function MainApp() {
                               {t("statsEmptyInitModel")}
                             </Button>
                           )}
-                          <Button variant="outline" className="h-9" onClick={() => setPage("history")}>
-                            {t("statsEmptyTryNow")}
-                          </Button>
                         </div>
-                        <div className="mx-auto mt-4 w-full max-w-[760px] rounded-xl border border-slate-200 bg-white/90 p-3 text-left shadow-sm">
-                          <div className="rounded-lg border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-3">
-                            <div className="text-sm font-semibold text-slate-800">{t("statsEmptyQuickTestTitle")}</div>
-                            <div className="mt-1 text-xs text-slate-500">{t("statsEmptyTryHint")}</div>
+                        <div className="mx-auto mt-4 grid w-full max-w-[820px] gap-3 text-left md:grid-cols-[0.95fr_1.25fr]">
+                          <div className="rounded-xl border border-slate-200 bg-white/95 p-4 shadow-sm">
+                            <div className="text-sm font-semibold text-slate-800">{t("statsEmptyGuideTitle")}</div>
+                            <p className="mt-2 text-xs leading-6 text-slate-500">{t("statsEmptyGuideDesc")}</p>
+                            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                              {t("statsEmptyTryHint")}
+                            </div>
                           </div>
-                          <Textarea
-                            className="mt-3 min-h-[120px] w-full resize-none border-slate-200 bg-white"
-                            value={homeTryText}
-                            onChange={(event) => setHomeTryText(event.target.value)}
-                            placeholder={t("statsEmptyInputPlaceholder")}
-                          />
+                          <div className="rounded-xl border border-slate-200 bg-white/95 p-3 shadow-sm">
+                            <div className="text-sm font-semibold text-slate-800">{t("statsEmptyQuickTestTitle")}</div>
+                            <Textarea
+                              className="mt-2 min-h-[112px] w-full resize-none border-slate-200 bg-white"
+                              value={homeTryText}
+                              onChange={(event) => setHomeTryText(event.target.value)}
+                              placeholder={t("statsEmptyInputPlaceholder")}
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3115,13 +3049,29 @@ function MainApp() {
                               />
                               {t("settingsCloudProviderEnabled")}
                             </label>
-                            <Button variant="outline" onClick={() => void onTestCloudProvider(provider.id)}>
-                              {t("settingsCloudTest")}
+                            <Button
+                              variant="outline"
+                              onClick={() => void onTestCloudProvider(provider.id)}
+                              disabled={testingProviderId === provider.id || savingCloudSettings}
+                            >
+                              {testingProviderId === provider.id ? <Loader2 size={14} className="animate-spin" /> : null}
+                              {testingProviderId === provider.id ? t("settingsCloudTesting") : t("settingsCloudTest")}
                             </Button>
                             <Button variant="outline" onClick={() => removeCloudProvider(index)}>
                               {t("settingsCloudRemoveProvider")}
                             </Button>
                           </div>
+                          {providerTestResults[provider.id] && (
+                            <div
+                              className={cn(
+                                "mt-2 text-xs",
+                                providerTestResults[provider.id]?.ok ? "text-emerald-600" : "text-rose-600"
+                              )}
+                            >
+                              {(providerTestResults[provider.id]?.ok ? t("settingsCloudTestOk") : t("settingsCloudTestFailed")) +
+                                `: ${providerTestResults[provider.id]?.message}`}
+                            </div>
+                          )}
                         </div>
                       ))}
                       <div className="flex gap-2">
