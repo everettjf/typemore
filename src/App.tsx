@@ -692,6 +692,11 @@ type DailyInputStat = {
   chars: number;
 };
 
+type RecordingCharStat = {
+  createdAtMs: number;
+  chars: number;
+};
+
 type UsageStats = {
   todayChars: number;
   dailyAvgChars: number;
@@ -1114,7 +1119,7 @@ function MainApp() {
     setHistorySelectedIds((prev) => prev.filter((id) => items.some((item) => item.id === id)));
   }
 
-  async function refreshUsageStats(items: RecordingItem[]) {
+  async function refreshUsageStats() {
     const now = new Date();
     const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
     const month = now.getMonth();
@@ -1142,20 +1147,14 @@ function MainApp() {
     let yearChars = 0;
     let totalChars = 0;
 
-    const texts = await Promise.all(
-      items.map((item) =>
-        invoke<string | null>("get_recording_cached_transcript", { id: item.id }).catch(() => null)
-      )
-    );
-
-    items.forEach((item, idx) => {
-      const text = texts[idx] ?? "";
-      const chars = Array.from(text).length;
+    const stats = await invoke<RecordingCharStat[]>("list_recording_char_stats");
+    stats.forEach((item) => {
+      const chars = Math.max(0, Number(item.chars) || 0);
       if (!chars) {
         return;
       }
       totalChars += chars;
-      const d = new Date(item.createdAtMs);
+      const d = new Date(Number(item.createdAtMs));
       if (d.getFullYear() === year) {
         yearChars += chars;
         if (d.getMonth() === month) {
@@ -1368,7 +1367,7 @@ function MainApp() {
   }, [appVersion]);
 
   useEffect(() => {
-    void refreshUsageStats(recordings);
+    void refreshUsageStats();
   }, [recordings]);
 
   useEffect(() => {

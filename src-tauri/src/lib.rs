@@ -15,8 +15,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    AppHandle, Emitter, Listener, LogicalSize, Manager, PhysicalPosition, Position, Size,
-    WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use walkdir::WalkDir;
@@ -154,6 +153,13 @@ struct GlobalShortcutPayload {
 struct SaveAndTranscribeResult {
     recording: RecordingItem,
     text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingCharStat {
+    created_at_ms: u128,
+    chars: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2073,6 +2079,24 @@ fn get_recording_cached_transcript(app: AppHandle, id: String) -> Result<Option<
 }
 
 #[tauri::command]
+fn list_recording_char_stats(app: AppHandle) -> Result<Vec<RecordingCharStat>, String> {
+    let dir = recordings_dir(&app)?;
+    let items = collect_recordings(&dir)?;
+    let cache = load_transcript_cache(&app)?;
+    let stats = items
+        .into_iter()
+        .map(|item| RecordingCharStat {
+            created_at_ms: item.created_at_ms,
+            chars: cache
+                .get(&item.id)
+                .map(|text| text.text.chars().count())
+                .unwrap_or(0),
+        })
+        .collect::<Vec<_>>();
+    Ok(stats)
+}
+
+#[tauri::command]
 fn transcribe_recording(app: AppHandle, id: String, force: Option<bool>) -> Result<String, String> {
     if !force.unwrap_or(false) {
         if let Some(text) = get_cached_transcript(&app, &id)? {
@@ -3285,17 +3309,6 @@ pub fn run() {
                 eprintln!("[typemore] fn key monitor active");
             }
 
-            if let Err(err) = ensure_overlay_window(app.handle()) {
-                eprintln!("[typemore] failed to create overlay window: {}", err);
-            } else if let Some(overlay) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
-                let _ = overlay.once("tauri://webview-created", |_| {
-                    eprintln!("[typemore] overlay webview created");
-                });
-                let _ = overlay.once("tauri://error", |_| {
-                    eprintln!("[typemore] overlay webview error");
-                });
-            }
-
             if let Err(err) = spawn_native_recorder_worker(app.handle()) {
                 eprintln!("[typemore] failed to start native recorder worker: {}", err);
             } else {
@@ -3320,6 +3333,7 @@ pub fn run() {
             get_model_init_status,
             init_model,
             list_recordings,
+            list_recording_char_stats,
             rename_recording,
             delete_recording,
             get_recording_cached_transcript,
