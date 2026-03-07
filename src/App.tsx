@@ -765,15 +765,11 @@ function OverlayWindowApp() {
   const title =
     phase === "listening"
       ? uiLang === "zh"
-        ? "正在听..."
-        : "Listening..."
+        ? "Listening"
+        : "Listening"
       : phase === "thinking"
-        ? uiLang === "zh"
-          ? "识别中..."
-          : "Processing..."
-        : uiLang === "zh"
-          ? "就绪"
-          : "Ready";
+        ? (text?.trim() || "Processing")
+      : "Ready";
   const speakingActive = level > 0.1;
   return (
     <main className="h-screen w-screen bg-transparent p-0">
@@ -812,9 +808,9 @@ function OverlayWindowApp() {
                 );
               })}
             </div>
-          ) : (
-            text && <div className="truncate text-xs text-white/80">{text}</div>
-          )}
+          ) : text && phase !== "thinking" ? (
+            <div className="truncate text-xs text-white/80">{text}</div>
+          ) : null}
         </div>
       </div>
     </main>

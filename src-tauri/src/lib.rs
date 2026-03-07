@@ -1158,6 +1158,7 @@ fn run_cloud_pipeline(
     source_text: &str,
     translate: bool,
     target_lang_override: Option<String>,
+    mut on_stage: Option<&mut dyn FnMut(&str)>,
 ) -> CloudProcessResult {
     let source = source_text.trim();
     if source.is_empty() {
@@ -1196,6 +1197,9 @@ fn run_cloud_pipeline(
         };
 
     let optimize_user = render_prompt_template(&settings.pipeline.optimize_prompt, source, None);
+    if let Some(cb) = on_stage.as_mut() {
+        cb("optimizing");
+    }
     let optimized = match call_provider_with_retry(
         optimize_provider,
         "You improve speech transcription text and return plain text only.",
@@ -1253,6 +1257,9 @@ fn run_cloud_pipeline(
         &optimized,
         Some(target.as_str()),
     );
+    if let Some(cb) = on_stage.as_mut() {
+        cb("translating");
+    }
     match call_provider_with_retry(
         translate_provider,
         "You are a professional translator. Return translated plain text only.",
@@ -2658,7 +2665,7 @@ fn process_text_with_cloud(
     translate: bool,
     target_lang: Option<String>,
 ) -> Result<CloudProcessResult, String> {
-    Ok(run_cloud_pipeline(&app, &text, translate, target_lang))
+    Ok(run_cloud_pipeline(&app, &text, translate, target_lang, None))
 }
 
 #[tauri::command]
@@ -2780,7 +2787,12 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         Some(action.clone()),
                         None,
                     );
-                    let _ = emit_overlay_state(&app_handle, "thinking", None, None);
+                    let _ = emit_overlay_state(
+                        &app_handle,
+                        "thinking",
+                        Some(localize_text(&app_handle, "Processing", "Processing")),
+                        None,
+                    );
                     let (samples_raw, sample_rate, channels) =
                         match stop_native_recording_internal(&mut recorder) {
                             Ok(v) => v,
@@ -2880,6 +2892,16 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         transcribe_started.elapsed().as_millis()
                     );
                     let cloud_started = Instant::now();
+                    let mut on_stage = |stage: &str| {
+                        let text = match stage {
+                            "optimizing" => localize_text(&app_handle, "Optimizing", "Optimizing"),
+                            "translating" => {
+                                localize_text(&app_handle, "Translating", "Translating")
+                            }
+                            _ => localize_text(&app_handle, "Processing", "Processing"),
+                        };
+                        let _ = emit_overlay_state(&app_handle, "thinking", Some(text), None);
+                    };
                     let cloud_result = run_cloud_pipeline(
                         &app_handle,
                         &text,
@@ -2889,6 +2911,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         } else {
                             None
                         },
+                        Some(&mut on_stage),
                     );
                     if !cloud_result.warnings.is_empty() {
                         for warning in &cloud_result.warnings {
