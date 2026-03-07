@@ -255,6 +255,10 @@ const I18N = {
     statsEmptyQuickTestTitle: "快速测试输入",
     testInputTitle: "测试输入",
     testInputDesc: "聚焦输入框后按 Fn（或 Fn+Shift）即可体验识别后的自动输入效果。",
+    testInputDictationBtn: "测试听写",
+    testInputTranslationBtn: "测试翻译",
+    testInputStopBtn: "停止",
+    testInputModeHint: "点击“测试翻译”会触发 translation 链路（Processing -> Optimizing -> Translating）。",
     viewHistory: "查看历史",
     recentRecordings: "最近录音",
     noRecordings: "还没有录音记录，先初始化模型并开始录音。",
@@ -451,6 +455,10 @@ const I18N = {
     statsEmptyQuickTestTitle: "Quick test input",
     testInputTitle: "Test Input",
     testInputDesc: "Focus the text area and press Fn (or Fn+Shift) to test end-to-end typing.",
+    testInputDictationBtn: "Test Dictation",
+    testInputTranslationBtn: "Test Translation",
+    testInputStopBtn: "Stop",
+    testInputModeHint: "“Test Translation” triggers the translation pipeline (Processing -> Optimizing -> Translating).",
     viewHistory: "View History",
     recentRecordings: "Recent Recordings",
     noRecordings: "No recordings yet. Initialize the model and start recording.",
@@ -1664,6 +1672,16 @@ function MainApp() {
     }
   }
 
+  async function onRunTestInput(action: HotkeyAction) {
+    if (isRecordingRef.current) {
+      if (activeHotkeyActionRef.current === action) {
+        await stopRecordingFromHotkey();
+      }
+      return;
+    }
+    await startRecordingFromHotkey(action);
+  }
+
   async function onRetranscribeSelected() {
     if (!selected) {
       setTranscript(t("transcriptNeedSelect"));
@@ -2630,6 +2648,43 @@ function MainApp() {
 
               <Card className="p-4">
                 <p className="text-sm text-slate-600">{t("testInputDesc")}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    className="h-9"
+                    onClick={() => {
+                      void onRunTestInput("toggle-dictation");
+                    }}
+                    disabled={isBusy || (isRecording && activeHotkeyActionRef.current !== "toggle-dictation")}
+                  >
+                    {isRecording && activeHotkeyActionRef.current === "toggle-dictation" ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        {t("testInputStopBtn")}
+                      </>
+                    ) : (
+                      t("testInputDictationBtn")
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-9"
+                    onClick={() => {
+                      void onRunTestInput("toggle-translation");
+                    }}
+                    disabled={isBusy || (isRecording && activeHotkeyActionRef.current !== "toggle-translation")}
+                  >
+                    {isRecording && activeHotkeyActionRef.current === "toggle-translation" ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        {t("testInputStopBtn")}
+                      </>
+                    ) : (
+                      t("testInputTranslationBtn")
+                    )}
+                  </Button>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">{t("testInputModeHint")}</p>
                 <div className="mt-4 grid gap-3 md:grid-cols-[0.95fr_1.25fr]">
                   <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                     <div className="text-sm font-semibold text-slate-800">{t("statsEmptyGuideTitle")}</div>
