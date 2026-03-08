@@ -79,18 +79,30 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                     || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_RIGHT_SHIFT)
             };
             if is_down && !was_down {
-                let fn_enabled = app_handle
+                let fn_dictation_enabled = app_handle
                     .state::<AppState>()
-                    .fn_key_enabled
+                    .fn_dictation_enabled
                     .lock()
                     .map(|v| *v)
                     .unwrap_or(false);
-                if fn_enabled {
-                    let action = if shift_down {
-                        "toggle-translation"
+                let fn_translation_enabled = app_handle
+                    .state::<AppState>()
+                    .fn_translation_enabled
+                    .lock()
+                    .map(|v| *v)
+                    .unwrap_or(false);
+                let action = if shift_down {
+                    if fn_translation_enabled {
+                        Some("toggle-translation")
                     } else {
-                        "toggle-dictation"
-                    };
+                        None
+                    }
+                } else if fn_dictation_enabled {
+                    Some("toggle-dictation")
+                } else {
+                    None
+                };
+                if let Some(action) = action {
                     eprintln!(
                         "[typemore][fn] pressed action={} shift={}",
                         action, shift_down
@@ -196,7 +208,8 @@ impl Default for ModelInitStatus {
 struct AppState {
     init_status: Mutex<ModelInitStatus>,
     hotkeys: Mutex<HotkeyConfig>,
-    fn_key_enabled: Mutex<bool>,
+    fn_dictation_enabled: Mutex<bool>,
+    fn_translation_enabled: Mutex<bool>,
     trigger_mode: Mutex<HotkeyTriggerMode>,
     overlay_position: Mutex<OverlayPosition>,
     output_mode: Mutex<OutputMode>,
@@ -404,6 +417,8 @@ enum NativeRecorderCommand {
 struct HotkeySettings {
     dictation: String,
     translation: String,
+    fn_dictation_enabled: bool,
+    fn_translation_enabled: bool,
     fn_enabled: bool,
     trigger_mode: HotkeyTriggerMode,
     overlay_position: OverlayPosition,
@@ -419,8 +434,10 @@ struct PersistedHotkeySettings {
     dictation: String,
     #[serde(default = "default_hotkey_translation")]
     translation: String,
-    #[serde(default = "default_fn_key_enabled")]
-    fn_enabled: bool,
+    #[serde(default = "default_fn_dictation_enabled")]
+    fn_dictation_enabled: bool,
+    #[serde(default = "default_fn_translation_enabled")]
+    fn_translation_enabled: bool,
     #[serde(default = "default_trigger_mode")]
     trigger_mode: HotkeyTriggerMode,
     #[serde(default = "default_overlay_position")]
@@ -530,7 +547,8 @@ impl Default for AppState {
                 build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)
                     .expect("invalid default hotkeys"),
             ),
-            fn_key_enabled: Mutex::new(default_fn_key_enabled()),
+            fn_dictation_enabled: Mutex::new(default_fn_dictation_enabled()),
+            fn_translation_enabled: Mutex::new(default_fn_translation_enabled()),
             trigger_mode: Mutex::new(default_trigger_mode()),
             overlay_position: Mutex::new(default_overlay_position()),
             output_mode: Mutex::new(default_output_mode()),
@@ -555,7 +573,11 @@ struct CachedTranscript {
 
 type TranscriptCacheMap = HashMap<String, CachedTranscript>;
 
-const fn default_fn_key_enabled() -> bool {
+const fn default_fn_dictation_enabled() -> bool {
+    true
+}
+
+const fn default_fn_translation_enabled() -> bool {
     true
 }
 
@@ -738,10 +760,15 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
             .map_err(|_| "failed to read hotkey settings".to_string())?;
         (lock.dictation.clone(), lock.translation.clone())
     };
-    let fn_enabled = state
-        .fn_key_enabled
+    let fn_dictation_enabled = state
+        .fn_dictation_enabled
         .lock()
-        .map_err(|_| "failed to read fn key settings".to_string())
+        .map_err(|_| "failed to read fn dictation settings".to_string())
+        .map(|v| *v)?;
+    let fn_translation_enabled = state
+        .fn_translation_enabled
+        .lock()
+        .map_err(|_| "failed to read fn translation settings".to_string())
         .map(|v| *v)?;
     let trigger_mode = state
         .trigger_mode
@@ -772,7 +799,9 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
     Ok(HotkeySettings {
         dictation,
         translation,
-        fn_enabled,
+        fn_dictation_enabled,
+        fn_translation_enabled,
+        fn_enabled: fn_dictation_enabled || fn_translation_enabled,
         trigger_mode,
         overlay_position,
         output_mode,
@@ -788,7 +817,8 @@ fn save_current_hotkey_settings(app: &AppHandle) -> Result<(), String> {
         &PersistedHotkeySettings {
             dictation: current.dictation,
             translation: current.translation,
-            fn_enabled: current.fn_enabled,
+            fn_dictation_enabled: current.fn_dictation_enabled,
+            fn_translation_enabled: current.fn_translation_enabled,
             trigger_mode: current.trigger_mode,
             overlay_position: current.overlay_position,
             output_mode: current.output_mode,
@@ -815,8 +845,20 @@ fn load_persisted_hotkeys(app: &AppHandle) -> Result<Option<PersistedHotkeySetti
     }
     let raw =
         fs::read_to_string(&path).map_err(|e| format!("failed to read hotkey settings: {e}"))?;
-    let parsed = serde_json::from_str::<PersistedHotkeySettings>(&raw)
+    let value = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|e| format!("failed to parse hotkey settings json: {e}"))?;
+    let mut parsed = serde_json::from_value::<PersistedHotkeySettings>(value.clone())
         .map_err(|e| format!("failed to parse hotkey settings: {e}"))?;
+    if let Some(legacy_fn_enabled) = value.get("fnEnabled").and_then(|v| v.as_bool()) {
+        let has_new_dictation = value.get("fnDictationEnabled").is_some();
+        let has_new_translation = value.get("fnTranslationEnabled").is_some();
+        if !has_new_dictation {
+            parsed.fn_dictation_enabled = legacy_fn_enabled;
+        }
+        if !has_new_translation {
+            parsed.fn_translation_enabled = legacy_fn_enabled;
+        }
+    }
     Ok(Some(parsed))
 }
 
@@ -2561,11 +2603,42 @@ fn set_global_shortcuts(
 fn set_fn_key_enabled(app: AppHandle, enabled: bool) -> Result<HotkeySettings, String> {
     let state = app.state::<AppState>();
     {
-        let mut lock = state
-            .fn_key_enabled
+        let mut dictation_lock = state
+            .fn_dictation_enabled
             .lock()
-            .map_err(|_| "failed to update fn key settings".to_string())?;
-        *lock = enabled;
+            .map_err(|_| "failed to update fn dictation settings".to_string())?;
+        *dictation_lock = enabled;
+        drop(dictation_lock);
+        let mut translation_lock = state
+            .fn_translation_enabled
+            .lock()
+            .map_err(|_| "failed to update fn translation settings".to_string())?;
+        *translation_lock = enabled;
+    }
+
+    save_current_hotkey_settings(&app)?;
+    collect_hotkey_settings(&app)
+}
+
+#[tauri::command]
+fn set_fn_key_modes(
+    app: AppHandle,
+    dictation_enabled: bool,
+    translation_enabled: bool,
+) -> Result<HotkeySettings, String> {
+    let state = app.state::<AppState>();
+    {
+        let mut dictation_lock = state
+            .fn_dictation_enabled
+            .lock()
+            .map_err(|_| "failed to update fn dictation settings".to_string())?;
+        *dictation_lock = dictation_enabled;
+        drop(dictation_lock);
+        let mut translation_lock = state
+            .fn_translation_enabled
+            .lock()
+            .map_err(|_| "failed to update fn translation settings".to_string())?;
+        *translation_lock = translation_enabled;
     }
 
     save_current_hotkey_settings(&app)?;
@@ -3242,10 +3315,14 @@ pub fn run() {
                 eprintln!("[typemore] failed to load cloud settings: {}", err);
                 None
             });
-            let fn_enabled = persisted
+            let fn_dictation_enabled = persisted
                 .as_ref()
-                .map(|saved| saved.fn_enabled)
-                .unwrap_or_else(default_fn_key_enabled);
+                .map(|saved| saved.fn_dictation_enabled)
+                .unwrap_or_else(default_fn_dictation_enabled);
+            let fn_translation_enabled = persisted
+                .as_ref()
+                .map(|saved| saved.fn_translation_enabled)
+                .unwrap_or_else(default_fn_translation_enabled);
             let trigger_mode = persisted
                 .as_ref()
                 .map(|saved| saved.trigger_mode)
@@ -3297,8 +3374,11 @@ pub fn run() {
                     lock.dictation, lock.translation
                 );
             }
-            if let Ok(mut lock) = app.state::<AppState>().fn_key_enabled.lock() {
-                *lock = fn_enabled;
+            if let Ok(mut lock) = app.state::<AppState>().fn_dictation_enabled.lock() {
+                *lock = fn_dictation_enabled;
+            }
+            if let Ok(mut lock) = app.state::<AppState>().fn_translation_enabled.lock() {
+                *lock = fn_translation_enabled;
             }
             if let Ok(mut lock) = app.state::<AppState>().trigger_mode.lock() {
                 *lock = trigger_mode;
@@ -3322,7 +3402,10 @@ pub fn run() {
             if let Ok(current_cloud) = app.state::<AppState>().cloud_settings.lock() {
                 let _ = save_persisted_cloud_settings(app.handle(), &current_cloud.clone());
             }
-            eprintln!("[typemore] fn key enabled: {}", fn_enabled);
+            eprintln!(
+                "[typemore] fn keys: dictation={} translation={}",
+                fn_dictation_enabled, fn_translation_enabled
+            );
             eprintln!("[typemore] ui language: {:?}", ui_language);
 
             #[cfg(target_os = "macos")]
@@ -3370,6 +3453,7 @@ pub fn run() {
             get_global_shortcuts,
             set_global_shortcuts,
             set_fn_key_enabled,
+            set_fn_key_modes,
             set_ui_language,
             get_cloud_settings,
             set_cloud_settings,

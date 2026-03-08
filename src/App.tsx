@@ -87,6 +87,8 @@ type HotkeySettings = {
   dictation: string;
   translation: string;
   fnEnabled: boolean;
+  fnDictationEnabled?: boolean;
+  fnTranslationEnabled?: boolean;
   triggerMode: HotkeyTriggerMode;
   overlayPosition: OverlayPosition;
   outputMode: OutputMode;
@@ -306,7 +308,9 @@ const I18N = {
     settingsHotkeyBuiltInHint: "内置快捷键可留空（仅使用 Fn / Fn+Shift）。也可按需单独设置听写或翻译快捷键。",
     settingsHotkeyDictation: "听写快捷键",
     settingsHotkeyTranslation: "翻译快捷键",
-    settingsFnKeyToggle: "启用 Fn 单键切换录音（macOS）",
+    settingsFnKeyToggle: "启用 Fn 内置快捷键（macOS）",
+    settingsFnKeyDictationToggle: "启用 Fn（听写）",
+    settingsFnKeyTranslationToggle: "启用 Fn+Shift（翻译）",
     settingsHotkeyTogglePlaceholder: "例如: CommandOrControl+Alt+Space",
     settingsHotkeySave: "保存快捷键",
     settingsHotkeyReset: "恢复默认",
@@ -506,7 +510,9 @@ const I18N = {
     settingsHotkeyBuiltInHint: "Built-in shortcuts can stay empty (Fn / Fn+Shift only), or you can set dictation/translation shortcuts individually.",
     settingsHotkeyDictation: "Dictation hotkey",
     settingsHotkeyTranslation: "Translation hotkey",
-    settingsFnKeyToggle: "Enable Fn one-key dictation toggle (macOS)",
+    settingsFnKeyToggle: "Enable built-in Fn shortcuts (macOS)",
+    settingsFnKeyDictationToggle: "Enable Fn (dictation)",
+    settingsFnKeyTranslationToggle: "Enable Fn+Shift (translation)",
     settingsHotkeyTogglePlaceholder: "e.g. CommandOrControl+Alt+Space",
     settingsHotkeySave: "Save hotkey",
     settingsHotkeyReset: "Reset default",
@@ -845,7 +851,8 @@ function MainApp() {
   const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
   const [hotkeyDictation, setHotkeyDictation] = useState(DEFAULT_HOTKEY_DICTATION);
   const [hotkeyTranslation, setHotkeyTranslation] = useState(DEFAULT_HOTKEY_TRANSLATION);
-  const [fnKeyEnabled, setFnKeyEnabled] = useState(true);
+  const [fnDictationEnabled, setFnDictationEnabled] = useState(true);
+  const [fnTranslationEnabled, setFnTranslationEnabled] = useState(true);
   const [triggerMode, setTriggerMode] = useState<HotkeyTriggerMode>(DEFAULT_TRIGGER_MODE);
   const [overlayPosition, setOverlayPosition] = useState<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
   const [outputMode, setOutputMode] = useState<OutputMode>(DEFAULT_OUTPUT_MODE);
@@ -1198,7 +1205,8 @@ function MainApp() {
     const settings = await invoke<HotkeySettings>("get_global_shortcuts");
     setHotkeyDictation(settings.dictation);
     setHotkeyTranslation(settings.translation);
-    setFnKeyEnabled(settings.fnEnabled);
+    setFnDictationEnabled(settings.fnDictationEnabled ?? settings.fnEnabled);
+    setFnTranslationEnabled(settings.fnTranslationEnabled ?? settings.fnEnabled);
     setTriggerMode(settings.triggerMode);
     setOverlayPosition(settings.overlayPosition);
     setOutputMode(settings.outputMode);
@@ -1835,7 +1843,8 @@ function MainApp() {
       });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
-      setFnKeyEnabled(next.fnEnabled);
+      setFnDictationEnabled(next.fnDictationEnabled ?? next.fnEnabled);
+      setFnTranslationEnabled(next.fnTranslationEnabled ?? next.fnEnabled);
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
@@ -1865,7 +1874,8 @@ function MainApp() {
       });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
-      setFnKeyEnabled(next.fnEnabled);
+      setFnDictationEnabled(next.fnDictationEnabled ?? next.fnEnabled);
+      setFnTranslationEnabled(next.fnTranslationEnabled ?? next.fnEnabled);
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
@@ -1877,13 +1887,17 @@ function MainApp() {
     }
   }
 
-  async function onToggleFnKeyEnabled(nextEnabled: boolean) {
+  async function onToggleFnKeyModes(nextDictationEnabled: boolean, nextTranslationEnabled: boolean) {
     setSavingHotkeys(true);
     try {
-      const next = await invoke<HotkeySettings>("set_fn_key_enabled", { enabled: nextEnabled });
+      const next = await invoke<HotkeySettings>("set_fn_key_modes", {
+        dictationEnabled: nextDictationEnabled,
+        translationEnabled: nextTranslationEnabled,
+      });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
-      setFnKeyEnabled(next.fnEnabled);
+      setFnDictationEnabled(next.fnDictationEnabled ?? next.fnEnabled);
+      setFnTranslationEnabled(next.fnTranslationEnabled ?? next.fnEnabled);
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
@@ -2916,16 +2930,39 @@ function MainApp() {
                           )}
                         </div>
                       )}
-                      <label className="flex items-center gap-2 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={fnKeyEnabled}
-                          disabled={savingHotkeys}
-                          onChange={(event) => void onToggleFnKeyEnabled(event.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                        />
-                        <span>{t("settingsFnKeyToggle")}</span>
-                      </label>
+                      <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2">
+                        <div className="text-xs font-medium text-slate-600">{t("settingsFnKeyToggle")}</div>
+                        <div className="mt-2 space-y-2">
+                          <label className="flex items-center gap-2 text-sm text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={fnDictationEnabled}
+                              disabled={savingHotkeys}
+                              onChange={(event) => {
+                                const nextDictationEnabled = event.target.checked;
+                                setFnDictationEnabled(nextDictationEnabled);
+                                void onToggleFnKeyModes(nextDictationEnabled, fnTranslationEnabled);
+                              }}
+                              className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                            />
+                            <span>{t("settingsFnKeyDictationToggle")}</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-sm text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={fnTranslationEnabled}
+                              disabled={savingHotkeys}
+                              onChange={(event) => {
+                                const nextTranslationEnabled = event.target.checked;
+                                setFnTranslationEnabled(nextTranslationEnabled);
+                                void onToggleFnKeyModes(fnDictationEnabled, nextTranslationEnabled);
+                              }}
+                              className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                            />
+                            <span>{t("settingsFnKeyTranslationToggle")}</span>
+                          </label>
+                        </div>
+                      </div>
                       <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
                       <div className="flex gap-2">
                         <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys || hasHotkeyConflicts}>
