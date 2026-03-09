@@ -419,7 +419,6 @@ struct HotkeySettings {
     translation: String,
     fn_dictation_enabled: bool,
     fn_translation_enabled: bool,
-    fn_enabled: bool,
     trigger_mode: HotkeyTriggerMode,
     overlay_position: OverlayPosition,
     output_mode: OutputMode,
@@ -801,7 +800,6 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
         translation,
         fn_dictation_enabled,
         fn_translation_enabled,
-        fn_enabled: fn_dictation_enabled || fn_translation_enabled,
         trigger_mode,
         overlay_position,
         output_mode,
@@ -845,20 +843,8 @@ fn load_persisted_hotkeys(app: &AppHandle) -> Result<Option<PersistedHotkeySetti
     }
     let raw =
         fs::read_to_string(&path).map_err(|e| format!("failed to read hotkey settings: {e}"))?;
-    let value = serde_json::from_str::<serde_json::Value>(&raw)
-        .map_err(|e| format!("failed to parse hotkey settings json: {e}"))?;
-    let mut parsed = serde_json::from_value::<PersistedHotkeySettings>(value.clone())
+    let parsed = serde_json::from_str::<PersistedHotkeySettings>(&raw)
         .map_err(|e| format!("failed to parse hotkey settings: {e}"))?;
-    if let Some(legacy_fn_enabled) = value.get("fnEnabled").and_then(|v| v.as_bool()) {
-        let has_new_dictation = value.get("fnDictationEnabled").is_some();
-        let has_new_translation = value.get("fnTranslationEnabled").is_some();
-        if !has_new_dictation {
-            parsed.fn_dictation_enabled = legacy_fn_enabled;
-        }
-        if !has_new_translation {
-            parsed.fn_translation_enabled = legacy_fn_enabled;
-        }
-    }
     Ok(Some(parsed))
 }
 
@@ -2600,27 +2586,6 @@ fn set_global_shortcuts(
 }
 
 #[tauri::command]
-fn set_fn_key_enabled(app: AppHandle, enabled: bool) -> Result<HotkeySettings, String> {
-    let state = app.state::<AppState>();
-    {
-        let mut dictation_lock = state
-            .fn_dictation_enabled
-            .lock()
-            .map_err(|_| "failed to update fn dictation settings".to_string())?;
-        *dictation_lock = enabled;
-        drop(dictation_lock);
-        let mut translation_lock = state
-            .fn_translation_enabled
-            .lock()
-            .map_err(|_| "failed to update fn translation settings".to_string())?;
-        *translation_lock = enabled;
-    }
-
-    save_current_hotkey_settings(&app)?;
-    collect_hotkey_settings(&app)
-}
-
-#[tauri::command]
 fn set_fn_key_modes(
     app: AppHandle,
     dictation_enabled: bool,
@@ -3452,7 +3417,6 @@ pub fn run() {
             type_text_to_focused_app,
             get_global_shortcuts,
             set_global_shortcuts,
-            set_fn_key_enabled,
             set_fn_key_modes,
             set_ui_language,
             get_cloud_settings,

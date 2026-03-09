@@ -20,6 +20,7 @@ import {
   FolderOpen,
   History,
   Home,
+  Languages,
   Loader2,
   Pencil,
   Plus,
@@ -45,7 +46,7 @@ import { cn } from "./lib/utils";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
-type Page = "home" | "history" | "dictionary" | "cloud" | "test";
+type Page = "home" | "history" | "dictionary" | "optimization" | "translation" | "test";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
 type CaptureTarget = "dictation" | "translation" | null;
@@ -86,9 +87,8 @@ type GlobalShortcutPayload = {
 type HotkeySettings = {
   dictation: string;
   translation: string;
-  fnEnabled: boolean;
-  fnDictationEnabled?: boolean;
-  fnTranslationEnabled?: boolean;
+  fnDictationEnabled: boolean;
+  fnTranslationEnabled: boolean;
   triggerMode: HotkeyTriggerMode;
   overlayPosition: OverlayPosition;
   outputMode: OutputMode;
@@ -211,6 +211,8 @@ const I18N = {
     navHome: "首页",
     navHistory: "历史",
     navDictionary: "词库",
+    navOptimization: "优化",
+    navTranslation: "翻译",
     navTestInput: "测试输入",
     navSettings: "设置",
     titleHome: "用你的声音，打出更多文字。",
@@ -413,6 +415,8 @@ const I18N = {
     navHome: "Home",
     navHistory: "History",
     navDictionary: "Dictionary",
+    navOptimization: "Optimization",
+    navTranslation: "Translation",
     navTestInput: "Test Input",
     navSettings: "Settings",
     titleHome: "Type More with your voice.",
@@ -1205,8 +1209,8 @@ function MainApp() {
     const settings = await invoke<HotkeySettings>("get_global_shortcuts");
     setHotkeyDictation(settings.dictation);
     setHotkeyTranslation(settings.translation);
-    setFnDictationEnabled(settings.fnDictationEnabled ?? settings.fnEnabled);
-    setFnTranslationEnabled(settings.fnTranslationEnabled ?? settings.fnEnabled);
+    setFnDictationEnabled(settings.fnDictationEnabled);
+    setFnTranslationEnabled(settings.fnTranslationEnabled);
     setTriggerMode(settings.triggerMode);
     setOverlayPosition(settings.overlayPosition);
     setOutputMode(settings.outputMode);
@@ -1843,8 +1847,8 @@ function MainApp() {
       });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
-      setFnDictationEnabled(next.fnDictationEnabled ?? next.fnEnabled);
-      setFnTranslationEnabled(next.fnTranslationEnabled ?? next.fnEnabled);
+      setFnDictationEnabled(next.fnDictationEnabled);
+      setFnTranslationEnabled(next.fnTranslationEnabled);
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
@@ -1874,8 +1878,8 @@ function MainApp() {
       });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
-      setFnDictationEnabled(next.fnDictationEnabled ?? next.fnEnabled);
-      setFnTranslationEnabled(next.fnTranslationEnabled ?? next.fnEnabled);
+      setFnDictationEnabled(next.fnDictationEnabled);
+      setFnTranslationEnabled(next.fnTranslationEnabled);
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
@@ -1896,8 +1900,8 @@ function MainApp() {
       });
       setHotkeyDictation(next.dictation);
       setHotkeyTranslation(next.translation);
-      setFnDictationEnabled(next.fnDictationEnabled ?? next.fnEnabled);
-      setFnTranslationEnabled(next.fnTranslationEnabled ?? next.fnEnabled);
+      setFnDictationEnabled(next.fnDictationEnabled);
+      setFnTranslationEnabled(next.fnTranslationEnabled);
       setTriggerMode(next.triggerMode);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
@@ -2066,7 +2070,8 @@ function MainApp() {
     { key: "home", label: t("navHome"), icon: Home },
     { key: "history", label: t("navHistory"), icon: History },
     { key: "dictionary", label: t("navDictionary"), icon: BookText },
-    { key: "cloud", label: t("settingsSectionCloud"), icon: Sparkles },
+    { key: "optimization", label: t("navOptimization"), icon: Sparkles },
+    { key: "translation", label: t("navTranslation"), icon: Languages },
     { key: "test", label: t("navTestInput"), icon: Pencil },
   ];
   const dailyInputChartData = useMemo(
@@ -2517,10 +2522,10 @@ function MainApp() {
             </div>
           )}
 
-          {page === "cloud" && (
+          {page === "optimization" && (
             <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_1fr]">
               <header className="flex items-center justify-between">
-                <h2 className="text-3xl font-semibold tracking-tight">{t("settingsSectionCloud")}</h2>
+                <h2 className="text-3xl font-semibold tracking-tight">{t("navOptimization")}</h2>
               </header>
 
               <Card className="p-4">
@@ -2580,6 +2585,37 @@ function MainApp() {
                       />
                     </div>
                   </div>
+
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={onSaveCloudSettings} disabled={savingCloudSettings}>
+                      {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {t("settingsCloudSave")}
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+
+          {page === "translation" && (
+            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_1fr]">
+              <header className="flex items-center justify-between">
+                <h2 className="text-3xl font-semibold tracking-tight">{t("navTranslation")}</h2>
+              </header>
+
+              <Card className="p-4">
+                <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
+                <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
+                <div className="mt-3 space-y-3">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={cloudSettings.pipeline.enabled}
+                      onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                    />
+                    <span>{t("settingsCloudEnabled")}</span>
+                  </label>
 
                   <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
                     <div className="text-sm font-semibold text-slate-900">{t("settingsCloudTranslateSection")}</div>
