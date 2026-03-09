@@ -240,6 +240,9 @@ const I18N = {
     updateAvailableTitle: "发现新版本",
     updateAvailableDesc: "当前 {current}，最新 {latest}。",
     updateOpenRelease: "查看更新",
+    updateCopyBrew: "复制 Homebrew 更新命令",
+    updateCopyBrewOk: "已复制：brew upgrade typemore",
+    updateCopyBrewFailed: "复制失败: {error}",
     updateRemindLater: "7 天后提醒",
     modelReady: "模型已就绪",
     modelInitializing: "初始化中",
@@ -444,6 +447,9 @@ const I18N = {
     updateAvailableTitle: "New version available",
     updateAvailableDesc: "Current {current}, latest {latest}.",
     updateOpenRelease: "Open releases",
+    updateCopyBrew: "Copy Homebrew command",
+    updateCopyBrewOk: "Copied: brew upgrade typemore",
+    updateCopyBrewFailed: "Copy failed: {error}",
     updateRemindLater: "Remind in 7 days",
     modelReady: "Model Ready",
     modelInitializing: "Initializing",
@@ -900,6 +906,8 @@ function MainApp() {
   const lastOverlayLevelSentAtRef = useRef(0);
   const lastOverlayLevelRef = useRef(0);
   const toastTimerRef = useRef<number | null>(null);
+  const usageStatsCacheRef = useRef<{ key: string; value: UsageStats } | null>(null);
+  const accessibilityLoadedRef = useRef(false);
 
   const selected = useMemo(
     () => recordings.find((item) => item.id === selectedId) ?? null,
@@ -1134,7 +1142,14 @@ function MainApp() {
     setHistorySelectedIds((prev) => prev.filter((id) => items.some((item) => item.id === id)));
   }
 
-  async function refreshUsageStats() {
+  async function refreshUsageStats(items: RecordingItem[]) {
+    const cacheKey = items.map((item) => `${item.id}:${item.createdAtMs}`).join("|");
+    const cached = usageStatsCacheRef.current;
+    if (cached && cached.key === cacheKey) {
+      setUsageStats(cached.value);
+      return;
+    }
+
     const now = new Date();
     const todayKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
     const month = now.getMonth();
@@ -1190,14 +1205,16 @@ function MainApp() {
       chars: charByDay.get(key) ?? 0,
     }));
     const dailyAvgChars = Math.round(dailyPoints.reduce((sum, p) => sum + p.chars, 0) / Math.max(1, dailyPoints.length));
-    setUsageStats({
+    const nextStats: UsageStats = {
       todayChars,
       dailyAvgChars,
       monthChars,
       yearChars,
       totalChars,
       dailyPoints,
-    });
+    };
+    usageStatsCacheRef.current = { key: cacheKey, value: nextStats };
+    setUsageStats(nextStats);
   }
 
   async function loadInitStatus() {
@@ -1293,7 +1310,7 @@ function MainApp() {
   }, [historyMenuId]);
 
   useEffect(() => {
-    Promise.all([loadRecordings(), loadInitStatus(), refreshAccessibilityStatus(), loadGlobalShortcuts(), loadCloudSettings()]).catch((err) => {
+    Promise.all([loadRecordings(), loadInitStatus(), loadGlobalShortcuts(), loadCloudSettings()]).catch((err) => {
       setTranscript(t("transcriptInitFailed", { error: String(err) }));
     });
 
@@ -1383,8 +1400,19 @@ function MainApp() {
   }, [appVersion]);
 
   useEffect(() => {
-    void refreshUsageStats();
+    void refreshUsageStats(recordings);
   }, [recordings]);
+
+  useEffect(() => {
+    if (page !== "home" || accessibilityLoadedRef.current) {
+      return;
+    }
+    accessibilityLoadedRef.current = true;
+    const timer = window.setTimeout(() => {
+      void refreshAccessibilityStatus();
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [page]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -1826,6 +1854,15 @@ function MainApp() {
     setLatestVersion(null);
   }
 
+  async function onCopyBrewUpgradeCommand() {
+    try {
+      await navigator.clipboard.writeText("brew upgrade typemore");
+      showToast(t("updateCopyBrewOk"), "success");
+    } catch (err) {
+      showToast(t("updateCopyBrewFailed", { error: String(err) }), "error");
+    }
+  }
+
   async function onSaveHotkeys() {
     const dictation = hotkeyDictation.trim();
     const translation = hotkeyTranslation.trim();
@@ -2074,6 +2111,21 @@ function MainApp() {
     { key: "translation", label: t("navTranslation"), icon: Languages },
     { key: "test", label: t("navTestInput"), icon: Pencil },
   ];
+  const processingIntro = (
+    <>
+      <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
+      <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
+      <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+        <input
+          type="checkbox"
+          checked={cloudSettings.pipeline.enabled}
+          onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
+          className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+        />
+        <span>{t("settingsCloudEnabled")}</span>
+      </label>
+    </>
+  );
   const dailyInputChartData = useMemo(
     () => ({
       labels: usageStats.dailyPoints.map((item) => item.dateLabel),
@@ -2230,6 +2282,9 @@ function MainApp() {
                     <div className="flex gap-2">
                       <Button variant="outline" className="h-8 text-xs" onClick={() => window.open(RELEASES_URL, "_blank", "noopener,noreferrer")}>
                         {t("updateOpenRelease")}
+                      </Button>
+                      <Button variant="outline" className="h-8 text-xs" onClick={() => void onCopyBrewUpgradeCommand()}>
+                        {t("updateCopyBrew")}
                       </Button>
                       <Button variant="outline" className="h-8 text-xs" onClick={onRemindUpdateLater}>
                         {t("updateRemindLater")}
@@ -2529,19 +2584,8 @@ function MainApp() {
               </header>
 
               <Card className="p-4">
-                <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
-                <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
+                {processingIntro}
                 <div className="mt-3 space-y-3">
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={cloudSettings.pipeline.enabled}
-                      onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
-                      className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                    />
-                    <span>{t("settingsCloudEnabled")}</span>
-                  </label>
-
                   {cloudSettings.providers.length === 0 && (
                     <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                       <div>{t("settingsCloudNoProviderHint")}</div>
@@ -2604,19 +2648,8 @@ function MainApp() {
               </header>
 
               <Card className="p-4">
-                <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
-                <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
+                {processingIntro}
                 <div className="mt-3 space-y-3">
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={cloudSettings.pipeline.enabled}
-                      onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
-                      className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                    />
-                    <span>{t("settingsCloudEnabled")}</span>
-                  </label>
-
                   <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
                     <div className="text-sm font-semibold text-slate-900">{t("settingsCloudTranslateSection")}</div>
                     <p className="mt-1 text-xs text-slate-500">{t("settingsCloudTranslateDesc")}</p>
