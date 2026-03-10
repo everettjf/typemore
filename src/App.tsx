@@ -2214,7 +2214,7 @@ function MainApp() {
                   type="button"
                   onClick={() => setPage(item.key)}
                   className={cn(
-                    "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium transition",
+                    "appearance-none border-0 outline-none flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium transition focus-visible:ring-0",
                     active ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"
                   )}
                 >
@@ -2229,7 +2229,7 @@ function MainApp() {
             <Separator />
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              className="appearance-none border-0 outline-none flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100 focus-visible:ring-0"
               onClick={() => {
                 setSettingsSection("language");
                 setSettingsOpen(true);
