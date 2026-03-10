@@ -802,7 +802,7 @@ function OverlayWindowApp() {
   const normalizedTitle = title.trim().toLowerCase();
   const titleClass = isListening
     ? isListeningTranslation
-      ? "text-cyan-200"
+      ? "text-orange-200"
       : "text-emerald-200"
     : phase === "ready"
       ? "text-emerald-300"
