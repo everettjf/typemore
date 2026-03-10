@@ -1,6 +1,6 @@
 [package]
 name = "TypeMore"
-version = "0.1.3"
+version = "0.1.4"
 description = "Type More With Your Voice"
 authors = ["you"]
 license = "Apache-2.0"
