@@ -5,6 +5,14 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Type More</title>
+    <script>
+      (function () {
+        var isOverlay = window.location.hash.indexOf("/overlay") >= 0;
+        if (isOverlay) {
+          document.documentElement.setAttribute("data-overlay-route", "1");
+        }
+      })();
+    </script>
     <style>
       html, body, #root {
         height: 100%;
@@ -28,6 +36,9 @@
           radial-gradient(860px 420px at 110% 0%, #d2f3ff 0%, transparent 55%),
           linear-gradient(145deg, #f3f8ff 0%, #f8fbff 48%, #ecf6ff 100%);
         transition: opacity 180ms ease;
+      }
+      html[data-overlay-route="1"] #boot-splash {
+        display: none !important;
       }
       #boot-splash.tm-hide {
         opacity: 0;

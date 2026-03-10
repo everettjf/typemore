@@ -15,7 +15,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   </React.StrictMode>,
 );
 
-if (splash && !isOverlayRoute) {
+if (!isOverlayRoute && splash) {
   window.requestAnimationFrame(() => {
     splash.classList.add("tm-hide");
     window.setTimeout(() => splash.remove(), 220);
