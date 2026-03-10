@@ -57,6 +57,7 @@ type OverlayPosition = "top" | "bottom";
 type OutputMode = "auto-paste" | "paste-and-keep" | "copy-only";
 type TranslationTargetLang = "auto" | "en" | "zh-CN" | "ja" | "ko";
 type SettingsSection = "language" | "hotkey" | "processing" | "providers" | "temp" | "about";
+type UpdateCheckState = "idle" | "checking" | "available" | "latest" | "error";
 type CloudVendor =
   | "openai"
   | "openrouter"
@@ -146,8 +147,11 @@ type TestCloudProviderResult = {
 
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
 const UPDATE_REMINDER_UNTIL_KEY = "typemore.update.remindUntil";
+const HOMEBREW_INSTALL_COMMAND = "brew install --cask everettjf/tap/typemore";
+const HOMEBREW_UPGRADE_COMMAND = "brew upgrade --cask typemore";
 const RELEASES_URL = "https://github.com/everettjf/typemore/releases";
 const RELEASES_API_LATEST_URL = "https://api.github.com/repos/everettjf/typemore/releases/latest";
+const RELEASES_LATEST_DOWNLOAD_URL = "https://github.com/everettjf/typemore/releases/latest/download/TypeMore.dmg";
 const DEFAULT_HOTKEY_DICTATION = "";
 const DEFAULT_HOTKEY_TRANSLATION = "";
 const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
@@ -238,11 +242,19 @@ const I18N = {
     statsEmptyInputPlaceholder: "这里是测试输入区，识别结果会自动粘贴到当前焦点位置。",
     updateAvailableTitle: "发现新版本",
     updateAvailableDesc: "当前 {current}，最新 {latest}。",
+    updateAvailableHelp: "可通过 Homebrew 更新，或打开 GitHub Releases 下载新的 DMG。",
     updateOpenRelease: "查看更新",
+    updateDownloadDmg: "下载 DMG",
     updateCopyBrew: "复制 Homebrew 更新命令",
-    updateCopyBrewOk: "已复制：brew upgrade typemore",
+    updateCopyBrewOk: "已复制：brew upgrade --cask typemore",
     updateCopyBrewFailed: "复制失败: {error}",
     updateRemindLater: "7 天后提醒",
+    updateCheckButton: "检查更新",
+    updateChecking: "检查中...",
+    updateStatusIdle: "点击按钮检查最新版本。",
+    updateStatusLatest: "当前已是最新版本。",
+    updateStatusAvailable: "发现新版本，可直接升级或下载最新 DMG。",
+    updateStatusError: "检查失败: {error}",
     modelReady: "模型已就绪",
     modelInitializing: "初始化中",
     modelNotReady: "模型未就绪",
@@ -306,6 +318,15 @@ const I18N = {
     settingsProjectGithub: "开源仓库",
     settingsProjectMoreApps: "更多 App",
     settingsProjectLicense: "协议",
+    settingsInstallTitle: "安装与更新",
+    settingsInstallDesc: "支持 Homebrew 安装升级，也支持从 GitHub Releases 下载最新 DMG。",
+    settingsInstallCommand: "安装命令",
+    settingsUpgradeCommand: "升级命令",
+    settingsCopyInstall: "复制安装命令",
+    settingsCopyUpgrade: "复制升级命令",
+    settingsCopyInstallOk: "已复制安装命令",
+    settingsCopyUpgradeOk: "已复制升级命令",
+    settingsCopyCommandFailed: "复制命令失败: {error}",
     settingsLanguageTitle: "语言",
     settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
     settingsHotkeyTitle: "全局快捷键",
@@ -446,11 +467,19 @@ const I18N = {
     statsEmptyInputPlaceholder: "Test input area. Recognized text will paste to the focused control.",
     updateAvailableTitle: "New version available",
     updateAvailableDesc: "Current {current}, latest {latest}.",
+    updateAvailableHelp: "Update with Homebrew, or open GitHub Releases to download the newest DMG.",
     updateOpenRelease: "Open releases",
+    updateDownloadDmg: "Download DMG",
     updateCopyBrew: "Copy Homebrew command",
-    updateCopyBrewOk: "Copied: brew upgrade typemore",
+    updateCopyBrewOk: "Copied: brew upgrade --cask typemore",
     updateCopyBrewFailed: "Copy failed: {error}",
     updateRemindLater: "Remind in 7 days",
+    updateCheckButton: "Check for updates",
+    updateChecking: "Checking...",
+    updateStatusIdle: "Click to check the latest version.",
+    updateStatusLatest: "You're already on the latest version.",
+    updateStatusAvailable: "A newer version is available. Upgrade with Homebrew or download the latest DMG.",
+    updateStatusError: "Update check failed: {error}",
     modelReady: "Model Ready",
     modelInitializing: "Initializing",
     modelNotReady: "Not Ready",
@@ -514,6 +543,15 @@ const I18N = {
     settingsProjectGithub: "Open-source repo",
     settingsProjectMoreApps: "More apps",
     settingsProjectLicense: "License",
+    settingsInstallTitle: "Install & Update",
+    settingsInstallDesc: "Use Homebrew for install and upgrades, or download the latest DMG from GitHub Releases.",
+    settingsInstallCommand: "Install command",
+    settingsUpgradeCommand: "Upgrade command",
+    settingsCopyInstall: "Copy install command",
+    settingsCopyUpgrade: "Copy upgrade command",
+    settingsCopyInstallOk: "Copied install command",
+    settingsCopyUpgradeOk: "Copied upgrade command",
+    settingsCopyCommandFailed: "Copy command failed: {error}",
     settingsLanguageTitle: "Language",
     settingsLanguageDesc: "Auto follow system language, or switch manually.",
     settingsHotkeyTitle: "Global Hotkey",
@@ -883,6 +921,10 @@ function MainApp() {
   const [usageStats, setUsageStats] = useState<UsageStats>(() => emptyUsageStats());
   const [appVersion, setAppVersion] = useState("-");
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [latestReleaseUrl, setLatestReleaseUrl] = useState(RELEASES_URL);
+  const [latestDmgUrl, setLatestDmgUrl] = useState(RELEASES_LATEST_DOWNLOAD_URL);
+  const [updateCheckState, setUpdateCheckState] = useState<UpdateCheckState>("idle");
+  const [updateCheckError, setUpdateCheckError] = useState<string | null>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1296,6 +1338,81 @@ function MainApp() {
     }, 2200);
   }
 
+  function openExternalUrl(url: string) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  async function copyText(text: string, successMessage: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(successMessage, "success");
+    } catch (err) {
+      showToast(t("settingsCopyCommandFailed", { error: String(err) }), "error");
+    }
+  }
+
+  async function checkForUpdates(options?: { manual?: boolean; ignoreReminder?: boolean }) {
+    const manual = options?.manual ?? false;
+    const ignoreReminder = options?.ignoreReminder ?? false;
+
+    if (!appVersion || appVersion === "-") {
+      return;
+    }
+
+    if (!ignoreReminder) {
+      const remindUntilRaw = window.localStorage.getItem(UPDATE_REMINDER_UNTIL_KEY);
+      const remindUntil = remindUntilRaw ? Number.parseInt(remindUntilRaw, 10) : 0;
+      if (Number.isFinite(remindUntil) && remindUntil > Date.now()) {
+        return;
+      }
+    }
+
+    if (manual) {
+      setUpdateCheckState("checking");
+      setUpdateCheckError(null);
+    }
+
+    try {
+      const response = await fetch(RELEASES_API_LATEST_URL, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as {
+        tag_name?: string;
+        name?: string;
+        html_url?: string;
+        assets?: Array<{ name?: string; browser_download_url?: string }>;
+      };
+      const latest = payload.tag_name ?? payload.name ?? "";
+      if (!latest) {
+        throw new Error("Missing release version");
+      }
+
+      setLatestReleaseUrl(payload.html_url ?? RELEASES_URL);
+      const dmgAsset = payload.assets?.find((asset) => asset.name?.toLowerCase().endsWith(".dmg"));
+      setLatestDmgUrl(dmgAsset?.browser_download_url ?? RELEASES_LATEST_DOWNLOAD_URL);
+
+      if (isVersionGreater(latest, appVersion)) {
+        window.localStorage.removeItem(UPDATE_REMINDER_UNTIL_KEY);
+        setLatestVersion(latest.replace(/^v/i, ""));
+        setUpdateCheckState("available");
+        setUpdateCheckError(null);
+      } else {
+        setLatestVersion(null);
+        setUpdateCheckState("latest");
+        setUpdateCheckError(null);
+      }
+    } catch (err) {
+      if (manual) {
+        setUpdateCheckState("error");
+        setUpdateCheckError(String(err));
+      }
+    }
+  }
+
   useEffect(() => {
     if (!historyMenuId) {
       return;
@@ -1374,31 +1491,7 @@ function MainApp() {
     if (!appVersion || appVersion === "-") {
       return;
     }
-    const remindUntilRaw = window.localStorage.getItem(UPDATE_REMINDER_UNTIL_KEY);
-    const remindUntil = remindUntilRaw ? Number.parseInt(remindUntilRaw, 10) : 0;
-    if (Number.isFinite(remindUntil) && remindUntil > Date.now()) {
-      return;
-    }
-    void (async () => {
-      try {
-        const response = await fetch(RELEASES_API_LATEST_URL, {
-          headers: { Accept: "application/vnd.github+json" },
-        });
-        if (!response.ok) {
-          return;
-        }
-        const payload = (await response.json()) as { tag_name?: string; name?: string };
-        const latest = payload.tag_name ?? payload.name ?? "";
-        if (!latest) {
-          return;
-        }
-        if (isVersionGreater(latest, appVersion)) {
-          setLatestVersion(latest.replace(/^v/i, ""));
-        }
-      } catch {
-        // Keep startup resilient when update check fails.
-      }
-    })();
+    void checkForUpdates();
   }, [appVersion]);
 
   useEffect(() => {
@@ -1843,11 +1936,12 @@ function MainApp() {
     const remindUntil = Date.now() + 7 * 24 * 60 * 60 * 1000;
     window.localStorage.setItem(UPDATE_REMINDER_UNTIL_KEY, String(remindUntil));
     setLatestVersion(null);
+    setUpdateCheckState("idle");
   }
 
   async function onCopyBrewUpgradeCommand() {
     try {
-      await navigator.clipboard.writeText("brew upgrade typemore");
+      await navigator.clipboard.writeText(HOMEBREW_UPGRADE_COMMAND);
       showToast(t("updateCopyBrewOk"), "success");
     } catch (err) {
       showToast(t("updateCopyBrewFailed", { error: String(err) }), "error");
@@ -2193,6 +2287,16 @@ function MainApp() {
   ];
   const currentSettingsLabel =
     settingsSections.find((item) => item.key === settingsSection)?.label ?? t("settingsTitle");
+  const updateStatusText =
+    updateCheckState === "checking"
+      ? t("updateChecking")
+      : updateCheckState === "available"
+        ? t("updateStatusAvailable")
+        : updateCheckState === "latest"
+          ? t("updateStatusLatest")
+          : updateCheckState === "error"
+            ? t("updateStatusError", { error: updateCheckError ?? "unknown error" })
+            : t("updateStatusIdle");
 
   return (
     <main className="typemore-app h-screen p-0 text-slate-900">
@@ -2268,9 +2372,10 @@ function MainApp() {
                       <div className="text-xs text-emerald-800">
                         {t("updateAvailableDesc", { current: `v${appVersion}`, latest: `v${latestVersion}` })}
                       </div>
+                      <div className="mt-1 text-xs text-emerald-700">{t("updateAvailableHelp")}</div>
                     </div>
                     <div className="flex gap-2">
-                      <Button variant="outline" className="h-8 text-xs" onClick={() => window.open(RELEASES_URL, "_blank", "noopener,noreferrer")}>
+                      <Button variant="outline" className="h-8 text-xs" onClick={() => openExternalUrl(latestReleaseUrl)}>
                         {t("updateOpenRelease")}
                       </Button>
                       <Button variant="outline" className="h-8 text-xs" onClick={() => void onCopyBrewUpgradeCommand()}>
@@ -3231,6 +3336,45 @@ function MainApp() {
                   {settingsSection === "about" && (
                   <Card className="tm-settings-card p-4">
                     <p className="text-sm text-slate-600">Project website, open-source repository, and license information.</p>
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="font-medium text-slate-900">{t("settingsInstallTitle")}</div>
+                      <p className="mt-1 text-sm text-slate-600">{t("settingsInstallDesc")}</p>
+                      <div className="mt-4 space-y-3 text-sm">
+                        <div>
+                          <div className="mb-1 text-slate-500">{t("settingsInstallCommand")}</div>
+                          <div className="rounded-xl bg-white px-3 py-2 font-mono text-[12px] text-slate-800">{HOMEBREW_INSTALL_COMMAND}</div>
+                        </div>
+                        <div>
+                          <div className="mb-1 text-slate-500">{t("settingsUpgradeCommand")}</div>
+                          <div className="rounded-xl bg-white px-3 py-2 font-mono text-[12px] text-slate-800">{HOMEBREW_UPGRADE_COMMAND}</div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="outline" className="h-8 text-xs" onClick={() => void copyText(HOMEBREW_INSTALL_COMMAND, t("settingsCopyInstallOk"))}>
+                            {t("settingsCopyInstall")}
+                          </Button>
+                          <Button variant="outline" className="h-8 text-xs" onClick={() => void copyText(HOMEBREW_UPGRADE_COMMAND, t("settingsCopyUpgradeOk"))}>
+                            {t("settingsCopyUpgrade")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            className="h-8 text-xs"
+                            onClick={() => {
+                              void checkForUpdates({ manual: true, ignoreReminder: true });
+                            }}
+                            disabled={updateCheckState === "checking"}
+                          >
+                            {updateCheckState === "checking" ? t("updateChecking") : t("updateCheckButton")}
+                          </Button>
+                          <Button variant="outline" className="h-8 text-xs" onClick={() => openExternalUrl(latestReleaseUrl)}>
+                            {t("updateOpenRelease")}
+                          </Button>
+                          <Button variant="outline" className="h-8 text-xs" onClick={() => openExternalUrl(latestDmgUrl)}>
+                            {t("updateDownloadDmg")}
+                          </Button>
+                        </div>
+                        <div className="text-xs text-slate-500">{updateStatusText}</div>
+                      </div>
+                    </div>
                     <div className="mt-4 space-y-2 text-sm text-slate-700">
                       <div className="font-medium text-slate-900">{t("settingsProjectInfo")}</div>
                       <div className="flex items-center justify-between gap-3">
