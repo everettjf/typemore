@@ -767,7 +767,15 @@ function OverlayWindowApp() {
       const nextUiLang = resolveUiLangFromLocalSetting();
       setUiLang(nextUiLang);
       setPhase(event.payload.phase);
-      setText(event.payload.text ?? "");
+      setText((prev) => {
+        if (typeof event.payload.text === "string") {
+          return event.payload.text;
+        }
+        if (event.payload.phase === "hidden") {
+          return "";
+        }
+        return prev;
+      });
     }).then((fn) => {
       unlisten = fn;
     });
