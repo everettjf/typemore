@@ -33,6 +33,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "files": {
+        "Frameworks/libonnxruntime.1.17.1.dylib": "target/release/libonnxruntime.1.17.1.dylib",
+        "Frameworks/libsherpa-onnx-c-api.dylib": "target/release/libsherpa-onnx-c-api.dylib"
+      }
+    }
   }
 }
