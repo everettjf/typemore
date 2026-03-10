@@ -26,3 +26,4 @@ build
 *.sln
 *.sw?
 website/
+tmp/
