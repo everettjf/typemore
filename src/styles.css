@@ -91,3 +91,23 @@ body.overlay-mode,
   border-color: rgba(148, 163, 184, 0.26) !important;
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
 }
+
+.tm-nav-btn {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tm-nav-btn:focus,
+.tm-nav-btn:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.tm-nav-btn::-moz-focus-inner {
+  border: 0;
+}
