@@ -1050,6 +1050,90 @@ fn append_dictionary_glossary(prompt: String, dictionary_words: &[String]) -> St
     rendered
 }
 
+fn replace_case_insensitive(input: &str, from: &str, to: &str) -> String {
+    if from.is_empty() {
+        return input.to_string();
+    }
+    if !input.is_ascii() || !from.is_ascii() || !to.is_ascii() {
+        return input.replace(from, to);
+    }
+    let lower_input = input.to_ascii_lowercase();
+    let lower_from = from.to_ascii_lowercase();
+    let mut out = String::with_capacity(input.len());
+    let mut search_start = 0usize;
+    let mut copied = 0usize;
+    while let Some(found) = lower_input[search_start..].find(&lower_from) {
+        let byte_idx = search_start + found;
+        out.push_str(&input[copied..byte_idx]);
+        out.push_str(to);
+        let next = byte_idx + lower_from.len();
+        search_start = next;
+        copied = next;
+    }
+    out.push_str(&input[copied..]);
+    out
+}
+
+fn split_camel_or_alnum_chunks(word: &str) -> Vec<String> {
+    if word.is_empty() {
+        return Vec::new();
+    }
+    let mut chunks = Vec::<String>::new();
+    let mut current = String::new();
+    let chars = word.chars().collect::<Vec<_>>();
+    for (idx, ch) in chars.iter().enumerate() {
+        let prev = if idx > 0 { Some(chars[idx - 1]) } else { None };
+        let next = chars.get(idx + 1).copied();
+        let should_split = if let Some(prev_ch) = prev {
+            (prev_ch.is_ascii_lowercase() && ch.is_ascii_uppercase())
+                || (prev_ch.is_ascii_alphabetic()
+                    && ch.is_ascii_digit()
+                    && !current.is_empty())
+                || (prev_ch.is_ascii_digit()
+                    && ch.is_ascii_alphabetic()
+                    && !current.is_empty())
+                || (prev_ch.is_ascii_uppercase()
+                    && ch.is_ascii_uppercase()
+                    && next.is_some_and(|n| n.is_ascii_lowercase())
+                    && !current.is_empty())
+        } else {
+            false
+        };
+        if should_split && !current.is_empty() {
+            chunks.push(current.clone());
+            current.clear();
+        }
+        current.push(*ch);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+fn apply_local_dictionary_terms(text: &str, dictionary_words: &[String]) -> String {
+    let mut output = text.to_string();
+    for word in dictionary_words {
+        let normalized = word.trim();
+        if normalized.is_empty() {
+            continue;
+        }
+        output = replace_case_insensitive(&output, normalized, normalized);
+        let chunks = split_camel_or_alnum_chunks(normalized);
+        if chunks.len() > 1 {
+            let lower_chunks = chunks
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect::<Vec<_>>();
+            for sep in [" ", "-", "_"] {
+                let variant = lower_chunks.join(sep);
+                output = replace_case_insensitive(&output, &variant, normalized);
+            }
+        }
+    }
+    output
+}
+
 async fn prompt_with_provider(
     provider: &CloudProviderConfig,
     system_prompt: &str,
@@ -1440,6 +1524,14 @@ fn recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app_data_dir(app)?.join(RECORDINGS_DIR_NAME);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create recordings dir: {e}"))?;
     Ok(dir)
+}
+
+fn dictionary_words_snapshot(app: &AppHandle) -> Vec<String> {
+    app.state::<AppState>()
+        .dictionary_words
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default()
 }
 
 fn transcript_cache_file(app: &AppHandle) -> Result<PathBuf, String> {
@@ -2369,6 +2461,7 @@ fn transcribe_recording(app: AppHandle, id: String, force: Option<bool>) -> Resu
     let wav_data = fs::read(&path).map_err(|e| format!("failed to read wav file: {e}"))?;
     let (samples, sample_rate) = decode_wav_samples(&wav_data)?;
     let text = transcribe_samples(&model, &tokens, sample_rate, &samples)?;
+    let text = apply_local_dictionary_terms(&text, &dictionary_words_snapshot(&app));
     put_cached_transcript(&app, &id, &text)?;
     Ok(text)
 }
@@ -2394,6 +2487,7 @@ fn save_recording_and_transcribe(
     let (model, tokens) = model_files_if_ready(&app)?;
     let (samples, sample_rate) = decode_wav_samples(&payload.wav_data)?;
     let text = transcribe_samples(&model, &tokens, sample_rate, &samples)?;
+    let text = apply_local_dictionary_terms(&text, &dictionary_words_snapshot(&app));
 
     let recording =
         to_recording_item(&path).ok_or_else(|| "failed to build recording metadata".to_string())?;
@@ -3166,6 +3260,10 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                             continue;
                         }
                     };
+                    text = apply_local_dictionary_terms(
+                        &text,
+                        &dictionary_words_snapshot(&app_handle),
+                    );
                     eprintln!(
                         "[typemore][recorder] transcribe done action={} samples={} rate={} channels={} elapsed_ms={}",
                         action,
