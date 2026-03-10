@@ -6,6 +6,12 @@ TypeMore is a macOS desktop app for offline speech-to-text. It captures your voi
 
 ![TypeMore interface](./website/public/images/app-mockup.jpg)
 
+<p align="center">
+  <img src="./screenshots/main.png" alt="TypeMore main screen" width="32%" />
+  <img src="./screenshots/optimization.png" alt="TypeMore optimization screen" width="32%" />
+  <img src="./screenshots/translate.png" alt="TypeMore translation screen" width="32%" />
+</p>
+
 ## Why TypeMore
 
 - Offline first: audio stays on your Mac.
