@@ -65,7 +65,9 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
         const KEYCODE_FN: u16 = 63;
         const KEYCODE_LEFT_SHIFT: u16 = 56;
         const KEYCODE_RIGHT_SHIFT: u16 = 60;
-        const DECIDE_WINDOW_MS: u128 = 220;
+        // Give users enough time to press Shift after holding Fn.
+        // This prioritizes the "Fn -> Shift" translation gesture.
+        const DECIDE_WINDOW_MS: u128 = 520;
 
         let mut was_down = false;
         let mut active_action: Option<&'static str> = None;
