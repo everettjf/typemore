@@ -46,6 +46,11 @@ Download the latest notarized DMG from GitHub Releases:
 - Releases page: <https://github.com/everettjf/typemore/releases>
 - Latest DMG: <https://github.com/everettjf/typemore/releases/latest/download/TypeMore.dmg>
 
+## Community
+
+- Website: <https://typemore.app>
+- Discord: <https://discord.com/invite/eGzEaP6TzR>
+
 ## Features
 
 - Offline speech recognition on macOS

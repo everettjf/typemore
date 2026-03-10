@@ -46,6 +46,11 @@ brew upgrade --cask typemore
 - Releases 页面：<https://github.com/everettjf/typemore/releases>
 - 最新 DMG：<https://github.com/everettjf/typemore/releases/latest/download/TypeMore.dmg>
 
+## 社区
+
+- 官网：<https://typemore.app>
+- Discord：<https://discord.com/invite/eGzEaP6TzR>
+
 ## 功能特性
 
 - macOS 离线语音识别
