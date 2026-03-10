@@ -46,7 +46,7 @@ import { cn } from "./lib/utils";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
-type Page = "home" | "history" | "dictionary" | "optimization" | "translation" | "test";
+type Page = "home" | "history" | "dictionary" | "optimization" | "translation";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
 type CaptureTarget = "dictation" | "translation" | null;
@@ -684,7 +684,7 @@ function defaultCloudSettings(): CloudSettings {
       translateProviderId: "",
       targetLanguage: "en",
       optimizePrompt:
-        "You are an expert text post-processor for speech transcription.\nFix recognition errors, punctuation, casing, and spacing.\nDo not add new facts. Return only the corrected text.",
+        "You are an expert post-processor for mixed Chinese-English speech transcription.\nCorrect ASR mistakes, punctuation, spacing, and casing while preserving the original language of each segment.\nDo not translate, do not add facts, and do not remove meaningful words.\nKeep code snippets, proper nouns, and technical terms unchanged when possible.\nReturn only the corrected text.",
       translatePrompt:
         "Translate the input text into {target_language}.\nPreserve meaning and tone. Return only translated text.",
       timeoutMs: 10000,
@@ -794,7 +794,8 @@ function OverlayWindowApp() {
       : phase === "thinking"
         ? (text?.trim() || "Processing")
       : "Ready";
-  const speakingActive = level > 0.1;
+  const speakingLevel = Math.max(0, Math.min(1, (level - 0.04) / 0.55));
+  const speakingActive = speakingLevel > 0.02;
   return (
     <main className="h-screen w-screen bg-transparent p-0">
       <div
@@ -815,18 +816,19 @@ function OverlayWindowApp() {
           {phase === "listening" ? (
             <div className="flex h-4 items-end gap-1.5">
               {[0.55, 0.8, 1, 0.82, 0.58].map((factor, index) => {
-                const active = Math.max(0.1, Math.min(1, level * 1.2 * factor));
+                const active = Math.max(0, Math.min(1, speakingLevel * factor));
+                const baseHeights = [6, 8, 10, 8, 6];
                 return (
                   <span
                     key={index}
                     className={cn(
-                      "w-1.5 rounded-full transition-all duration-75",
-                      active > 0.2 ? "bg-white" : "bg-white/60"
+                      "w-1.5 rounded-full transition-all duration-120 ease-out",
+                      active > 0.16 ? "bg-white" : "bg-white/55"
                     )}
                     style={{
-                      height: `${7 + index * 1.1}px`,
-                      opacity: 0.5 + active * 0.5,
-                      boxShadow: active > 0.2 ? "0 0 8px rgba(255, 255, 255, 0.25)" : "none",
+                      height: `${baseHeights[index] + active * 9}px`,
+                      opacity: 0.45 + active * 0.55,
+                      boxShadow: active > 0.16 ? "0 0 8px rgba(255, 255, 255, 0.25)" : "none",
                     }}
                   />
                 );
@@ -880,7 +882,6 @@ function MainApp() {
   const [usageStats, setUsageStats] = useState<UsageStats>(() => emptyUsageStats());
   const [appVersion, setAppVersion] = useState("-");
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
-  const [homeTryText, setHomeTryText] = useState("");
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -1712,16 +1713,6 @@ function MainApp() {
     }
   }
 
-  async function onRunTestInput(action: HotkeyAction) {
-    if (isRecordingRef.current) {
-      if (activeHotkeyActionRef.current === action) {
-        await stopRecordingFromHotkey();
-      }
-      return;
-    }
-    await startRecordingFromHotkey(action);
-  }
-
   async function onRetranscribeSelected() {
     if (!selected) {
       setTranscript(t("transcriptNeedSelect"));
@@ -1801,10 +1792,7 @@ function MainApp() {
     if (historySelectedIds.length === 0) {
       return;
     }
-    const ok = window.confirm(t("historyDeleteSelectedConfirm", { count: historySelectedIds.length }));
-    if (!ok) {
-      return;
-    }
+    setIsBusy(true);
     try {
       await Promise.all(historySelectedIds.map((id) => invoke("delete_recording", { id })));
       const selectedSet = new Set(historySelectedIds);
@@ -1820,6 +1808,8 @@ function MainApp() {
       setHistoryMenuId(null);
     } catch (err) {
       setTranscript(t("transcriptDeleteFailed", { error: String(err) }));
+    } finally {
+      setIsBusy(false);
     }
   }
 
@@ -2109,7 +2099,6 @@ function MainApp() {
     { key: "dictionary", label: t("navDictionary"), icon: BookText },
     { key: "optimization", label: t("navOptimization"), icon: Sparkles },
     { key: "translation", label: t("navTranslation"), icon: Languages },
-    { key: "test", label: t("navTestInput"), icon: Pencil },
   ];
   const processingIntro = (
     <>
@@ -2442,7 +2431,7 @@ function MainApp() {
                       onClick={() => {
                         void onDeleteSelectedHistory();
                       }}
-                      disabled={historySelectedIds.length === 0}
+                      disabled={historySelectedIds.length === 0 || isBusy}
                     >
                       {t("historyDeleteSelected")}
                     </Button>
@@ -2717,71 +2706,6 @@ function MainApp() {
                       {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
                       {t("settingsCloudSave")}
                     </Button>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {page === "test" && (
-            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_1fr]">
-              <header className="flex items-center justify-between">
-                <h2 className="text-3xl font-semibold tracking-tight">{t("testInputTitle")}</h2>
-              </header>
-
-              <Card className="p-4">
-                <p className="text-sm text-slate-600">{t("testInputDesc")}</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    className="h-9"
-                    onClick={() => {
-                      void onRunTestInput("toggle-dictation");
-                    }}
-                    disabled={isBusy || (isRecording && activeHotkeyActionRef.current !== "toggle-dictation")}
-                  >
-                    {isRecording && activeHotkeyActionRef.current === "toggle-dictation" ? (
-                      <>
-                        <Loader2 size={14} className="animate-spin" />
-                        {t("testInputStopBtn")}
-                      </>
-                    ) : (
-                      t("testInputDictationBtn")
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-9"
-                    onClick={() => {
-                      void onRunTestInput("toggle-translation");
-                    }}
-                    disabled={isBusy || (isRecording && activeHotkeyActionRef.current !== "toggle-translation")}
-                  >
-                    {isRecording && activeHotkeyActionRef.current === "toggle-translation" ? (
-                      <>
-                        <Loader2 size={14} className="animate-spin" />
-                        {t("testInputStopBtn")}
-                      </>
-                    ) : (
-                      t("testInputTranslationBtn")
-                    )}
-                  </Button>
-                </div>
-                <p className="mt-2 text-xs text-slate-500">{t("testInputModeHint")}</p>
-                <div className="mt-4 grid gap-3 md:grid-cols-[0.95fr_1.25fr]">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-                    <div className="text-sm font-semibold text-slate-800">{t("statsEmptyGuideTitle")}</div>
-                    <p className="mt-2 text-sm leading-7 text-slate-600">{t("statsEmptyGuideDesc")}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-white p-4">
-                    <div className="text-sm font-semibold text-slate-800">{t("statsEmptyQuickTestTitle")}</div>
-                    <Textarea
-                      className="mt-2 min-h-[220px] w-full resize-none border-slate-200 bg-white"
-                      value={homeTryText}
-                      onChange={(event) => setHomeTryText(event.target.value)}
-                      placeholder={t("statsEmptyInputPlaceholder")}
-                    />
-                    <p className="mt-2 text-xs text-slate-500">{t("statsEmptyTryHint")}</p>
                   </div>
                 </div>
               </Card>

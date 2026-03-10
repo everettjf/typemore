@@ -64,9 +64,31 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
         const KEYCODE_FN: u16 = 63;
         const KEYCODE_LEFT_SHIFT: u16 = 56;
         const KEYCODE_RIGHT_SHIFT: u16 = 60;
+        const DECIDE_WINDOW_MS: u128 = 220;
 
         let mut was_down = false;
         let mut active_action: Option<&'static str> = None;
+        let mut press_started_at: Option<Instant> = None;
+        let mut shift_seen = false;
+        let mut pressed_emitted = false;
+
+        let choose_action = |shift_intent: bool,
+                             fn_dictation_enabled: bool,
+                             fn_translation_enabled: bool|
+         -> Option<&'static str> {
+            if shift_intent {
+                if fn_translation_enabled {
+                    Some("toggle-translation")
+                } else {
+                    None
+                }
+            } else if fn_dictation_enabled {
+                Some("toggle-dictation")
+            } else {
+                None
+            }
+        };
+
         loop {
             let is_down = unsafe {
                 CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_FN)
@@ -78,46 +100,79 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                     || CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_RIGHT_SHIFT)
                     || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_RIGHT_SHIFT)
             };
+            let fn_dictation_enabled = app_handle
+                .state::<AppState>()
+                .fn_dictation_enabled
+                .lock()
+                .map(|v| *v)
+                .unwrap_or(false);
+            let fn_translation_enabled = app_handle
+                .state::<AppState>()
+                .fn_translation_enabled
+                .lock()
+                .map(|v| *v)
+                .unwrap_or(false);
+
             if is_down && !was_down {
-                let fn_dictation_enabled = app_handle
-                    .state::<AppState>()
-                    .fn_dictation_enabled
-                    .lock()
-                    .map(|v| *v)
-                    .unwrap_or(false);
-                let fn_translation_enabled = app_handle
-                    .state::<AppState>()
-                    .fn_translation_enabled
-                    .lock()
-                    .map(|v| *v)
-                    .unwrap_or(false);
-                let action = if shift_down {
-                    if fn_translation_enabled {
-                        Some("toggle-translation")
-                    } else {
-                        None
-                    }
-                } else if fn_dictation_enabled {
-                    Some("toggle-dictation")
-                } else {
-                    None
-                };
-                if let Some(action) = action {
-                    eprintln!(
-                        "[typemore][fn] pressed action={} shift={}",
-                        action, shift_down
+                press_started_at = Some(Instant::now());
+                shift_seen = shift_down;
+                pressed_emitted = false;
+                active_action = None;
+                if fn_dictation_enabled || fn_translation_enabled {
+                    let _ = emit_overlay_state(
+                        &app_handle,
+                        "listening",
+                        Some(localize_text(&app_handle, "Listening", "Listening")),
+                        Some(0.0),
                     );
-                    active_action = Some(action);
-                    let shortcut = if shift_down { "Fn+Shift" } else { "Fn" };
-                    emit_hotkey_event(&app_handle, action, shortcut, "pressed");
-                    handle_native_hotkey_event(&app_handle, action, "pressed");
+                }
+            } else if is_down && was_down {
+                shift_seen |= shift_down;
+                if !pressed_emitted
+                    && press_started_at
+                        .map(|t| t.elapsed().as_millis() >= DECIDE_WINDOW_MS)
+                        .unwrap_or(false)
+                {
+                    let action =
+                        choose_action(shift_seen, fn_dictation_enabled, fn_translation_enabled);
+                    if let Some(action) = action {
+                        eprintln!(
+                            "[typemore][fn] pressed action={} shift={}",
+                            action, shift_seen
+                        );
+                        active_action = Some(action);
+                        let shortcut = if shift_seen { "Fn+Shift" } else { "Fn" };
+                        emit_hotkey_event(&app_handle, action, shortcut, "pressed");
+                        handle_native_hotkey_event(&app_handle, action, "pressed");
+                    }
+                    pressed_emitted = true;
                 }
             } else if !is_down && was_down {
+                // For very quick taps, emit press on release so tap mode still works.
+                if !pressed_emitted {
+                    let action =
+                        choose_action(shift_seen || shift_down, fn_dictation_enabled, fn_translation_enabled);
+                    if let Some(action) = action {
+                        eprintln!(
+                            "[typemore][fn] pressed action={} shift={}",
+                            action,
+                            shift_seen || shift_down
+                        );
+                        active_action = Some(action);
+                        let shortcut = if shift_seen || shift_down { "Fn+Shift" } else { "Fn" };
+                        emit_hotkey_event(&app_handle, action, shortcut, "pressed");
+                        handle_native_hotkey_event(&app_handle, action, "pressed");
+                    }
+                }
+
                 if let Some(action) = active_action.take() {
                     eprintln!("[typemore][fn] released action={}", action);
                     emit_hotkey_event(&app_handle, action, "Fn", "released");
                     handle_native_hotkey_event(&app_handle, action, "released");
                 }
+                press_started_at = None;
+                shift_seen = false;
+                pressed_emitted = false;
             }
             was_down = is_down;
             std::thread::sleep(std::time::Duration::from_millis(16));
@@ -617,7 +672,7 @@ fn default_cloud_target_language() -> String {
 }
 
 fn default_optimize_prompt() -> String {
-    "You are an expert text post-processor for speech transcription.\nFix recognition errors, punctuation, casing, and spacing.\nDo not add new facts. Return only the corrected text.".to_string()
+    "You are an expert post-processor for mixed Chinese-English speech transcription.\nCorrect ASR mistakes, punctuation, spacing, and casing while preserving the original language of each segment.\nDo not translate, do not add facts, and do not remove meaningful words.\nKeep code snippets, proper nouns, and technical terms unchanged when possible.\nReturn only the corrected text.".to_string()
 }
 
 fn default_translate_prompt() -> String {
@@ -1777,7 +1832,39 @@ fn transcribe_samples(
     Ok(result.text)
 }
 
-fn start_native_recording_internal(recorder: &mut Option<NativeRecorder>) -> Result<(), String> {
+fn emit_native_listening_level(
+    app: &AppHandle,
+    last_emit: &Arc<Mutex<Instant>>,
+    smooth_level: &Arc<Mutex<f32>>,
+    rms: f32,
+) {
+    let scaled = (rms * 5.0).clamp(0.0, 1.0);
+    let smoothed = if let Ok(mut smooth) = smooth_level.lock() {
+        *smooth = (*smooth * 0.72) + (scaled * 0.28);
+        *smooth
+    } else {
+        scaled
+    };
+    let gated = if smoothed < 0.035 { 0.0 } else { smoothed };
+    let should_emit = if let Ok(mut last) = last_emit.lock() {
+        if last.elapsed() >= Duration::from_millis(95) {
+            *last = Instant::now();
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if should_emit {
+        let _ = emit_overlay_state(app, "listening", None, Some(gated));
+    }
+}
+
+fn start_native_recording_internal(
+    recorder: &mut Option<NativeRecorder>,
+    app_handle: &AppHandle,
+) -> Result<(), String> {
     if recorder.is_some() {
         return Ok(());
     }
@@ -1794,30 +1881,74 @@ fn start_native_recording_internal(recorder: &mut Option<NativeRecorder>) -> Res
     let channels = config.channels();
     let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
     let samples_ref = Arc::clone(&samples);
+    let level_last_emit = Arc::new(Mutex::new(Instant::now() - Duration::from_millis(200)));
+    let level_smooth = Arc::new(Mutex::new(0.0f32));
     let err_fn = |err| eprintln!("[typemore] native recording stream error: {err}");
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_input_stream(
-                &config.config(),
-                move |data: &[f32], _| {
-                    if let Ok(mut buf) = samples_ref.lock() {
-                        buf.extend_from_slice(data);
-                    }
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| format!("failed to build f32 input stream: {e}"))?,
+        cpal::SampleFormat::F32 => {
+            let level_app = app_handle.clone();
+            let level_last_emit = Arc::clone(&level_last_emit);
+            let level_smooth = Arc::clone(&level_smooth);
+            device
+                .build_input_stream(
+                    &config.config(),
+                    move |data: &[f32], _| {
+                        if data.is_empty() {
+                            return;
+                        }
+                        let mut sum = 0.0f32;
+                        for sample in data {
+                            sum += *sample * *sample;
+                        }
+                        let rms = (sum / data.len() as f32).sqrt();
+                        emit_native_listening_level(
+                            &level_app,
+                            &level_last_emit,
+                            &level_smooth,
+                            rms,
+                        );
+                        if let Ok(mut buf) = samples_ref.lock() {
+                            buf.extend_from_slice(data);
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| format!("failed to build f32 input stream: {e}"))?
+        }
         cpal::SampleFormat::I16 => {
             let samples_ref = Arc::clone(&samples);
+            let level_app = app_handle.clone();
+            let level_last_emit = Arc::clone(&level_last_emit);
+            let level_smooth = Arc::clone(&level_smooth);
             device
                 .build_input_stream(
                     &config.config(),
                     move |data: &[i16], _| {
-                        if let Ok(mut buf) = samples_ref.lock() {
-                            buf.extend(data.iter().map(|v| *v as f32 / i16::MAX as f32));
+                        if data.is_empty() {
+                            return;
                         }
+                        let mut sum = 0.0f32;
+                        if let Ok(mut buf) = samples_ref.lock() {
+                            for value in data {
+                                let sample = *value as f32 / i16::MAX as f32;
+                                sum += sample * sample;
+                                buf.push(sample);
+                            }
+                        } else {
+                            for value in data {
+                                let sample = *value as f32 / i16::MAX as f32;
+                                sum += sample * sample;
+                            }
+                        }
+                        let rms = (sum / data.len() as f32).sqrt();
+                        emit_native_listening_level(
+                            &level_app,
+                            &level_last_emit,
+                            &level_smooth,
+                            rms,
+                        );
                     },
                     err_fn,
                     None,
@@ -1826,16 +1957,36 @@ fn start_native_recording_internal(recorder: &mut Option<NativeRecorder>) -> Res
         }
         cpal::SampleFormat::U16 => {
             let samples_ref = Arc::clone(&samples);
+            let level_app = app_handle.clone();
+            let level_last_emit = Arc::clone(&level_last_emit);
+            let level_smooth = Arc::clone(&level_smooth);
             device
                 .build_input_stream(
                     &config.config(),
                     move |data: &[u16], _| {
-                        if let Ok(mut buf) = samples_ref.lock() {
-                            buf.extend(
-                                data.iter()
-                                    .map(|v| (*v as f32 / u16::MAX as f32) * 2.0 - 1.0),
-                            );
+                        if data.is_empty() {
+                            return;
                         }
+                        let mut sum = 0.0f32;
+                        if let Ok(mut buf) = samples_ref.lock() {
+                            for value in data {
+                                let sample = (*value as f32 / u16::MAX as f32) * 2.0 - 1.0;
+                                sum += sample * sample;
+                                buf.push(sample);
+                            }
+                        } else {
+                            for value in data {
+                                let sample = (*value as f32 / u16::MAX as f32) * 2.0 - 1.0;
+                                sum += sample * sample;
+                            }
+                        }
+                        let rms = (sum / data.len() as f32).sqrt();
+                        emit_native_listening_level(
+                            &level_app,
+                            &level_last_emit,
+                            &level_smooth,
+                            rms,
+                        );
                     },
                     err_fn,
                     None,
@@ -2789,7 +2940,9 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         Some(action.clone()),
                         None,
                     );
-                    if let Err(err) = start_native_recording_internal(&mut recorder) {
+                    // Show listening immediately on hotkey press, independent of voice activity.
+                    let _ = emit_overlay_state(&app_handle, "listening", Some(action.clone()), Some(0.0));
+                    if let Err(err) = start_native_recording_internal(&mut recorder, &app_handle) {
                         eprintln!(
                             "[typemore][recorder] start failed action={} error={}",
                             action, err
@@ -2815,7 +2968,6 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         Some(action.clone()),
                         Some(Instant::now()),
                     );
-                    let _ = emit_overlay_state(&app_handle, "listening", Some(action), Some(0.0));
                 }
                 NativeRecorderCommand::Stop { action } => {
                     eprintln!("[typemore][recorder] cmd=stop action={}", action);
