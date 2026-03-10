@@ -116,6 +116,12 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                 .lock()
                 .map(|v| *v)
                 .unwrap_or(false);
+            let trigger_mode = app_handle
+                .state::<AppState>()
+                .trigger_mode
+                .lock()
+                .map(|v| *v)
+                .unwrap_or(default_trigger_mode());
 
             if is_down && !was_down {
                 press_started_at = Some(Instant::now());
@@ -133,18 +139,29 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
             } else if is_down && was_down {
                 let shift_rising = !prev_shift_down && shift_down;
                 shift_seen |= shift_down;
-                if shift_rising && !pressed_emitted && fn_translation_enabled {
-                    let action = "toggle-translation";
-                    eprintln!("[typemore][fn] pressed action={} shift=true", action);
-                    active_action = Some(action);
-                    emit_hotkey_event(&app_handle, action, "Fn+Shift", "pressed");
-                    handle_native_hotkey_event(&app_handle, action, "pressed");
-                    pressed_emitted = true;
+                if shift_rising && fn_translation_enabled {
+                    // Once Shift is detected while Fn is held, lock this session to translation.
+                    if pressed_emitted && active_action == Some("toggle-dictation") {
+                        // If long-press already started dictation, switch to translation immediately.
+                        emit_hotkey_event(&app_handle, "toggle-dictation", "Fn", "released");
+                        handle_native_hotkey_event(&app_handle, "toggle-dictation", "released");
+                        pressed_emitted = false;
+                        active_action = None;
+                    }
+                    if !pressed_emitted {
+                        let action = "toggle-translation";
+                        eprintln!("[typemore][fn] pressed action={} shift=true", action);
+                        active_action = Some(action);
+                        emit_hotkey_event(&app_handle, action, "Fn+Shift", "pressed");
+                        handle_native_hotkey_event(&app_handle, action, "pressed");
+                        pressed_emitted = true;
+                    }
                 }
                 if !pressed_emitted
                     && press_started_at
                         .map(|t| t.elapsed().as_millis() >= DECIDE_WINDOW_MS)
                         .unwrap_or(false)
+                    && trigger_mode == HotkeyTriggerMode::LongPress
                 {
                     let action =
                         choose_action(shift_seen, fn_dictation_enabled, fn_translation_enabled);
