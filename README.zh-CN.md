@@ -2,9 +2,14 @@
 
 [English README](./README.md)
 
-TypeMore 是一款 macOS 离线语音转文字桌面应用。它会在本地采集你的语音、在设备上完成语音识别，并通过低摩擦的快捷键工作流把结果回填到当前输入位置。
+TypeMore 是一款 macOS 离线语音转文字桌面应用。它会在本地采集你的语音、在设备上完成语音识别，并通过快捷键工作流把结果回填到当前输入位置。
 
-![TypeMore 界面](./website/public/images/app-mockup.jpg)
+
+<p align="center">
+  <img src="./screenshots/main.png" alt="TypeMore main screen" width="32%" />
+  <img src="./screenshots/optimization.png" alt="TypeMore optimization screen" width="32%" />
+  <img src="./screenshots/translate.png" alt="TypeMore translation screen" width="32%" />
+</p>
 
 ## 为什么选择 TypeMore
 

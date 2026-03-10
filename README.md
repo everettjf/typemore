@@ -2,9 +2,8 @@
 
 [中文说明](./README.zh-CN.md)
 
-TypeMore is a macOS desktop app for offline speech-to-text. It captures your voice locally, runs speech recognition on-device, and pastes the result back into the active input with a low-friction hotkey workflow.
+TypeMore is a macOS desktop app for offline speech-to-text. It captures your voice locally, runs speech recognition on-device, and pastes the result back into the active input with a hotkey workflow.
 
-![TypeMore interface](./website/public/images/app-mockup.jpg)
 
 <p align="center">
   <img src="./screenshots/main.png" alt="TypeMore main screen" width="32%" />
