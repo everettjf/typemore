@@ -756,7 +756,6 @@ function emptyUsageStats(): UsageStats {
 function OverlayWindowApp() {
   const [phase, setPhase] = useState<OverlayStatePayload["phase"]>("hidden");
   const [text, setText] = useState("");
-  const [level, setLevel] = useState(0);
   const [uiLang, setUiLang] = useState<UiLang>(() => resolveUiLangFromLocalSetting());
 
   useEffect(() => {
@@ -769,7 +768,6 @@ function OverlayWindowApp() {
       setUiLang(nextUiLang);
       setPhase(event.payload.phase);
       setText(event.payload.text ?? "");
-      setLevel(Math.max(0, Math.min(1, Number(event.payload.level ?? 0))));
     }).then((fn) => {
       unlisten = fn;
     });
@@ -795,8 +793,7 @@ function OverlayWindowApp() {
       : phase === "thinking"
         ? (text?.trim() || "Processing")
       : "Ready";
-  const speakingLevel = Math.max(0, Math.min(1, (level - 0.04) / 0.55));
-  const speakingActive = speakingLevel > 0.02;
+  const isListening = phase === "listening";
   return (
     <main className="h-screen w-screen bg-transparent p-0">
       <div
@@ -805,37 +802,21 @@ function OverlayWindowApp() {
           phase === "ready" ? "opacity-95" : "opacity-100"
         )}
       >
-        <div className="flex h-full items-center justify-between gap-3">
+        <div
+          className={cn(
+            "flex h-full items-center gap-3",
+            isListening ? "justify-center" : "justify-between"
+          )}
+        >
           <div
             className={cn(
               "text-sm font-semibold tracking-tight leading-none transition-colors duration-100",
-              phase === "listening" && speakingActive ? "text-emerald-200" : "text-white"
+              isListening ? "text-emerald-200" : "text-white"
             )}
           >
             {title}
           </div>
-          {phase === "listening" ? (
-            <div className="flex h-4 items-end gap-1.5">
-              {[0.55, 0.8, 1, 0.82, 0.58].map((factor, index) => {
-                const active = Math.max(0, Math.min(1, speakingLevel * factor));
-                const baseHeights = [6, 8, 10, 8, 6];
-                return (
-                  <span
-                    key={index}
-                    className={cn(
-                      "w-1.5 rounded-full transition-all duration-120 ease-out",
-                      active > 0.16 ? "bg-white" : "bg-white/55"
-                    )}
-                    style={{
-                      height: `${baseHeights[index] + active * 9}px`,
-                      opacity: 0.45 + active * 0.55,
-                      boxShadow: active > 0.16 ? "0 0 8px rgba(255, 255, 255, 0.25)" : "none",
-                    }}
-                  />
-                );
-              })}
-            </div>
-          ) : text && phase !== "thinking" ? (
+          {!isListening && text && phase !== "thinking" ? (
             <div className="truncate text-xs text-white/80">{text}</div>
           ) : null}
         </div>
