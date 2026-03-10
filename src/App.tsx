@@ -794,6 +794,18 @@ function OverlayWindowApp() {
         ? (text?.trim() || "Processing")
       : "Ready";
   const isListening = phase === "listening";
+  const normalizedTitle = title.trim().toLowerCase();
+  const titleClass = isListening
+    ? "text-emerald-200"
+    : phase === "ready"
+      ? "text-emerald-300"
+      : normalizedTitle.includes("optimiz") || normalizedTitle.includes("优化")
+        ? "text-amber-200"
+        : normalizedTitle.includes("process")
+          ? "text-sky-200"
+          : normalizedTitle.includes("translat")
+            ? "text-cyan-200"
+            : "text-white";
   return (
     <main className="h-screen w-screen bg-transparent p-0">
       <div
@@ -802,23 +814,15 @@ function OverlayWindowApp() {
           phase === "ready" ? "opacity-95" : "opacity-100"
         )}
       >
-        <div
-          className={cn(
-            "flex h-full items-center gap-3",
-            isListening ? "justify-center" : "justify-between"
-          )}
-        >
+        <div className="flex h-full items-center justify-center gap-3">
           <div
             className={cn(
               "text-sm font-semibold tracking-tight leading-none transition-colors duration-100",
-              isListening ? "text-emerald-200" : "text-white"
+              titleClass
             )}
           >
             {title}
           </div>
-          {!isListening && text && phase !== "thinking" ? (
-            <div className="truncate text-xs text-white/80">{text}</div>
-          ) : null}
         </div>
       </div>
     </main>
