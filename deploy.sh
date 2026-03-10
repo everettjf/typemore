@@ -76,6 +76,7 @@ require_cmd cargo
 require_cmd codesign
 require_cmd gh
 require_cmd git
+require_cmd hdiutil
 require_cmd node
 require_cmd shasum
 require_cmd spctl
@@ -158,20 +159,45 @@ echo "Cleaning previous bundle artifacts..."
 rm -rf "$REPO_DIR/src-tauri/target/release/bundle"
 
 echo "Building signed macOS app..."
-APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY" \
-APPLE_ID="$APPLE_ID" \
-APPLE_PASSWORD="$APPLE_APP_SPECIFIC_PASSWORD" \
-APPLE_TEAM_ID="$APPLE_TEAM_ID" \
-bun run tauri build
+bun run tauri build --bundles app
 
-DMG_PATH="$(ls -t "$REPO_DIR/src-tauri/target/release/bundle/dmg/TypeMore_${VERSION}_"*.dmg 2>/dev/null | head -1 || true)"
-if [ -z "$DMG_PATH" ]; then
-  echo "No versioned DMG found for $VERSION." >&2
+APP_PATH="$(ls -td "$REPO_DIR"/src-tauri/target/release/bundle/macos/*.app 2>/dev/null | head -1 || true)"
+if [ -z "$APP_PATH" ]; then
+  echo "No .app found at src-tauri/target/release/bundle/macos/" >&2
   exit 1
 fi
 
-DMG_DIR="$(dirname "$DMG_PATH")"
+echo "Signing bundled runtime libraries..."
+find "$APP_PATH/Contents/Frameworks" -maxdepth 1 -type f -name '*.dylib' -print0 | while IFS= read -r -d '' dylib; do
+  codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$dylib"
+done
+
+echo "Signing app bundle..."
+codesign --force --sign "$SIGNING_IDENTITY" --timestamp --options runtime --deep "$APP_PATH"
+
+echo "Verifying app signature..."
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+spctl --assess -vv "$APP_PATH"
+
+echo "Building signed DMG..."
+DMG_DIR="$REPO_DIR/src-tauri/target/release/bundle/dmg"
+STAGING_DIR="$TMP_DIR/dmg-stage"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  arm64) DMG_ARCH="aarch64" ;;
+  x86_64) DMG_ARCH="x64" ;;
+  *) DMG_ARCH="$ARCH" ;;
+esac
+
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR" "$DMG_DIR"
+cp -R "$APP_PATH" "$STAGING_DIR/TypeMore.app"
+ln -s /Applications "$STAGING_DIR/Applications"
+
+DMG_PATH="$DMG_DIR/TypeMore_${VERSION}_${DMG_ARCH}.dmg"
 RELEASE_DMG_PATH="$DMG_DIR/TypeMore.dmg"
+rm -f "$DMG_PATH" "$RELEASE_DMG_PATH"
+hdiutil create -volname "TypeMore" -srcfolder "$STAGING_DIR" -ov -format UDZO "$DMG_PATH"
 cp -f "$DMG_PATH" "$RELEASE_DMG_PATH"
 
 echo "Submitting DMG for notarization..."
@@ -188,16 +214,6 @@ fi
 echo "Stapling notarization ticket..."
 xcrun stapler staple "$RELEASE_DMG_PATH"
 xcrun stapler validate "$RELEASE_DMG_PATH"
-
-APP_PATH="$(ls -td "$REPO_DIR"/src-tauri/target/release/bundle/macos/*.app 2>/dev/null | head -1 || true)"
-if [ -z "$APP_PATH" ]; then
-  echo "No .app found at src-tauri/target/release/bundle/macos/" >&2
-  exit 1
-fi
-
-echo "Verifying app signature..."
-codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-spctl --assess -vv "$APP_PATH"
 
 cat > "$RELEASE_BODY_FILE" <<EOF
 # TypeMore $TAG
