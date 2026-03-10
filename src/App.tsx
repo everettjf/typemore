@@ -794,9 +794,16 @@ function OverlayWindowApp() {
         ? (text?.trim() || "Processing")
       : "Ready";
   const isListening = phase === "listening";
+  const isListeningTranslation =
+    isListening &&
+    (text?.includes("toggle-translation") ||
+      text?.toLowerCase().includes("translation") ||
+      text?.includes("翻译"));
   const normalizedTitle = title.trim().toLowerCase();
   const titleClass = isListening
-    ? "text-emerald-200"
+    ? isListeningTranslation
+      ? "text-cyan-200"
+      : "text-emerald-200"
     : phase === "ready"
       ? "text-emerald-300"
       : normalizedTitle.includes("optimiz") || normalizedTitle.includes("优化")
