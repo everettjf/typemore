@@ -71,6 +71,7 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
         let mut active_action: Option<&'static str> = None;
         let mut press_started_at: Option<Instant> = None;
         let mut shift_seen = false;
+        let mut prev_shift_down = false;
         let mut pressed_emitted = false;
 
         let choose_action = |shift_intent: bool,
@@ -117,6 +118,7 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
             if is_down && !was_down {
                 press_started_at = Some(Instant::now());
                 shift_seen = shift_down;
+                prev_shift_down = shift_down;
                 pressed_emitted = false;
                 active_action = None;
                 if fn_dictation_enabled || fn_translation_enabled {
@@ -128,7 +130,16 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                     );
                 }
             } else if is_down && was_down {
+                let shift_rising = !prev_shift_down && shift_down;
                 shift_seen |= shift_down;
+                if shift_rising && !pressed_emitted && fn_translation_enabled {
+                    let action = "toggle-translation";
+                    eprintln!("[typemore][fn] pressed action={} shift=true", action);
+                    active_action = Some(action);
+                    emit_hotkey_event(&app_handle, action, "Fn+Shift", "pressed");
+                    handle_native_hotkey_event(&app_handle, action, "pressed");
+                    pressed_emitted = true;
+                }
                 if !pressed_emitted
                     && press_started_at
                         .map(|t| t.elapsed().as_millis() >= DECIDE_WINDOW_MS)
@@ -173,8 +184,10 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                 }
                 press_started_at = None;
                 shift_seen = false;
+                prev_shift_down = false;
                 pressed_emitted = false;
             }
+            prev_shift_down = shift_down;
             was_down = is_down;
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
