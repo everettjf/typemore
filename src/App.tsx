@@ -144,7 +144,6 @@ type TestCloudProviderResult = {
   message: string;
 };
 
-const DICTIONARY_STORAGE_KEY = "typemore.dictionary.words";
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
 const UPDATE_REMINDER_UNTIL_KEY = "typemore.update.remindUntil";
 const RELEASES_URL = "https://github.com/everettjf/typemore/releases";
@@ -288,6 +287,7 @@ const I18N = {
     dictionaryWords: "{count} 个词",
     dictionaryPlaceholder: "添加新词，比如 TestFlight",
     dictionaryAdd: "添加词条",
+    dictionaryOptimizeHint: "词库仅在启用 Processing 并执行 Optimizing 时生效。",
     dictionaryEmpty: "还没有词条，先添加几个常用专有名词。",
     dictionaryDelete: "删除词条",
     settingsTitle: "设置",
@@ -495,6 +495,7 @@ const I18N = {
     dictionaryWords: "{count} words",
     dictionaryPlaceholder: "Add a word, e.g. TestFlight",
     dictionaryAdd: "Add word",
+    dictionaryOptimizeHint: "Dictionary terms are applied only when Processing is enabled and Optimizing runs.",
     dictionaryEmpty: "No dictionary words yet. Add a few proper nouns first.",
     dictionaryDelete: "Delete word",
     settingsTitle: "Settings",
@@ -909,6 +910,7 @@ function MainApp() {
   const toastTimerRef = useRef<number | null>(null);
   const usageStatsCacheRef = useRef<{ key: string; value: UsageStats } | null>(null);
   const accessibilityLoadedRef = useRef(false);
+  const dictionaryLoadedRef = useRef(false);
 
   const selected = useMemo(
     () => recordings.find((item) => item.id === selectedId) ?? null,
@@ -1244,6 +1246,17 @@ function MainApp() {
     }
   }
 
+  async function loadDictionaryWords() {
+    try {
+      const words = await invoke<string[]>("get_dictionary_words");
+      setDictionaryWords(Array.isArray(words) ? words : []);
+    } catch {
+      setDictionaryWords([]);
+    } finally {
+      dictionaryLoadedRef.current = true;
+    }
+  }
+
   async function refreshAccessibilityStatus() {
     try {
       const status = await invoke<AccessibilityStatus>("get_accessibility_status");
@@ -1254,22 +1267,10 @@ function MainApp() {
   }
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(DICTIONARY_STORAGE_KEY);
-    if (!raw) {
+    if (!dictionaryLoadedRef.current) {
       return;
     }
-    try {
-      const words = JSON.parse(raw) as string[];
-      if (Array.isArray(words)) {
-        setDictionaryWords(words.filter((word) => typeof word === "string"));
-      }
-    } catch {
-      window.localStorage.removeItem(DICTIONARY_STORAGE_KEY);
-    }
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(DICTIONARY_STORAGE_KEY, JSON.stringify(dictionaryWords));
+    invoke<string[]>("set_dictionary_words", { words: dictionaryWords }).catch(() => {});
   }, [dictionaryWords]);
 
   useEffect(() => {
@@ -1311,7 +1312,7 @@ function MainApp() {
   }, [historyMenuId]);
 
   useEffect(() => {
-    Promise.all([loadRecordings(), loadInitStatus(), loadGlobalShortcuts(), loadCloudSettings()]).catch((err) => {
+    Promise.all([loadRecordings(), loadInitStatus(), loadGlobalShortcuts(), loadCloudSettings(), loadDictionaryWords()]).catch((err) => {
       setTranscript(t("transcriptInitFailed", { error: String(err) }));
     });
 
@@ -2735,6 +2736,7 @@ function MainApp() {
                     {t("dictionaryAdd")}
                   </Button>
                 </div>
+                <p className="mt-2 text-xs text-slate-500">{t("dictionaryOptimizeHint")}</p>
               </Card>
 
               <Card className="min-h-0 overflow-hidden">

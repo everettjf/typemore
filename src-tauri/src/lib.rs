@@ -26,6 +26,7 @@ const EXTRACTED_DIR_NAME: &str = "extracted";
 const RECORDINGS_DIR_NAME: &str = "recordings";
 const TEMP_DIR_NAME: &str = "tmp";
 const TRANSCRIPT_CACHE_FILE: &str = "transcript_cache.json";
+const DICTIONARY_WORDS_FILE: &str = "dictionary_words.json";
 const INIT_EVENT: &str = "model-init-progress";
 const HOTKEY_EVENT: &str = "global-shortcut-triggered";
 const OVERLAY_EVENT: &str = "overlay-state";
@@ -271,6 +272,7 @@ struct AppState {
     translation_target: Mutex<TranslationTargetLang>,
     ui_language: Mutex<UiLanguage>,
     cloud_settings: Mutex<CloudSettings>,
+    dictionary_words: Mutex<Vec<String>>,
     hotkey_runtime: Mutex<HotkeyRuntimeState>,
     native_hotkey_session: Mutex<NativeHotkeySession>,
     native_recorder_tx: Mutex<Option<mpsc::Sender<NativeRecorderCommand>>>,
@@ -609,6 +611,7 @@ impl Default for AppState {
             translation_target: Mutex::new(default_translation_target()),
             ui_language: Mutex::new(default_ui_language()),
             cloud_settings: Mutex::new(CloudSettings::default()),
+            dictionary_words: Mutex::new(Vec::new()),
             hotkey_runtime: Mutex::new(HotkeyRuntimeState {
                 suppress_dictation_until: None,
             }),
@@ -917,6 +920,50 @@ fn cloud_settings_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("cloud_settings.json"))
 }
 
+fn dictionary_words_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join(DICTIONARY_WORDS_FILE))
+}
+
+fn normalize_dictionary_words(words: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::<String>::new();
+    let mut seen = std::collections::HashSet::<String>::new();
+    for raw in words {
+        let word = raw.trim();
+        if word.is_empty() {
+            continue;
+        }
+        let key = word.to_lowercase();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.insert(key);
+        normalized.push(word.to_string());
+        if normalized.len() >= 200 {
+            break;
+        }
+    }
+    normalized
+}
+
+fn load_persisted_dictionary_words(app: &AppHandle) -> Result<Option<Vec<String>>, String> {
+    let path = dictionary_words_file(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| format!("failed to read dictionary words settings: {e}"))?;
+    let parsed = serde_json::from_str::<Vec<String>>(&raw)
+        .map_err(|e| format!("failed to parse dictionary words settings: {e}"))?;
+    Ok(Some(normalize_dictionary_words(parsed)))
+}
+
+fn save_persisted_dictionary_words(app: &AppHandle, words: &[String]) -> Result<(), String> {
+    let path = dictionary_words_file(app)?;
+    let raw = serde_json::to_string_pretty(words)
+        .map_err(|e| format!("failed to serialize dictionary words settings: {e}"))?;
+    fs::write(path, raw).map_err(|e| format!("failed to write dictionary words settings: {e}"))
+}
+
 fn validate_cloud_settings(settings: &CloudSettings) -> Result<(), String> {
     let mut ids = std::collections::HashSet::new();
     for provider in &settings.providers {
@@ -986,6 +1033,21 @@ fn render_prompt_template(template: &str, text: &str, target_language: Option<&s
     } else {
         rendered
     }
+}
+
+fn append_dictionary_glossary(prompt: String, dictionary_words: &[String]) -> String {
+    if dictionary_words.is_empty() {
+        return prompt;
+    }
+    let mut rendered = prompt;
+    rendered.push_str(
+        "\n\nPreferred glossary (apply only when relevant, do not force unrelated terms):",
+    );
+    for word in dictionary_words.iter().take(120) {
+        rendered.push_str("\n- ");
+        rendered.push_str(word);
+    }
+    rendered
 }
 
 async fn prompt_with_provider(
@@ -1280,6 +1342,13 @@ fn run_cloud_pipeline(
         };
 
     let optimize_user = render_prompt_template(&settings.pipeline.optimize_prompt, source, None);
+    let dictionary_words = app
+        .state::<AppState>()
+        .dictionary_words
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default();
+    let optimize_user = append_dictionary_glossary(optimize_user, &dictionary_words);
     if let Some(cb) = on_stage.as_mut() {
         cb("optimizing");
     }
@@ -2793,6 +2862,30 @@ fn get_cloud_settings(app: AppHandle) -> Result<CloudSettings, String> {
 }
 
 #[tauri::command]
+fn get_dictionary_words(app: AppHandle) -> Result<Vec<String>, String> {
+    app.state::<AppState>()
+        .dictionary_words
+        .lock()
+        .map(|v| v.clone())
+        .map_err(|_| "failed to read dictionary words".to_string())
+}
+
+#[tauri::command]
+fn set_dictionary_words(app: AppHandle, words: Vec<String>) -> Result<Vec<String>, String> {
+    let normalized = normalize_dictionary_words(words);
+    {
+        let state = app.state::<AppState>();
+        let mut lock = state
+            .dictionary_words
+            .lock()
+            .map_err(|_| "failed to update dictionary words".to_string())?;
+        *lock = normalized.clone();
+    }
+    save_persisted_dictionary_words(&app, &normalized)?;
+    Ok(normalized)
+}
+
+#[tauri::command]
 fn set_cloud_settings(app: AppHandle, settings: CloudSettings) -> Result<CloudSettings, String> {
     validate_cloud_settings(&settings)?;
     {
@@ -3432,6 +3525,11 @@ pub fn run() {
                 eprintln!("[typemore] failed to load cloud settings: {}", err);
                 None
             });
+            let persisted_dictionary =
+                load_persisted_dictionary_words(app.handle()).unwrap_or_else(|err| {
+                    eprintln!("[typemore] failed to load dictionary words settings: {}", err);
+                    None
+                });
             let fn_dictation_enabled = persisted
                 .as_ref()
                 .map(|saved| saved.fn_dictation_enabled)
@@ -3515,9 +3613,16 @@ pub fn run() {
             if let Ok(mut lock) = app.state::<AppState>().cloud_settings.lock() {
                 *lock = persisted_cloud.unwrap_or_default();
             }
+            if let Ok(mut lock) = app.state::<AppState>().dictionary_words.lock() {
+                *lock = persisted_dictionary.unwrap_or_default();
+            }
             let _ = save_current_hotkey_settings(app.handle());
             if let Ok(current_cloud) = app.state::<AppState>().cloud_settings.lock() {
                 let _ = save_persisted_cloud_settings(app.handle(), &current_cloud.clone());
+            }
+            if let Ok(current_dictionary) = app.state::<AppState>().dictionary_words.lock() {
+                let _ =
+                    save_persisted_dictionary_words(app.handle(), &current_dictionary.clone());
             }
             eprintln!(
                 "[typemore] fn keys: dictation={} translation={}",
@@ -3573,6 +3678,8 @@ pub fn run() {
             set_ui_language,
             get_cloud_settings,
             set_cloud_settings,
+            get_dictionary_words,
+            set_dictionary_words,
             test_cloud_provider,
             process_text_with_cloud,
             set_overlay_state,
