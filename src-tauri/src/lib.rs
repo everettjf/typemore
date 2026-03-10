@@ -51,6 +51,28 @@ unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
     fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
+    fn CGEventCreate(source: *const c_void) -> *const c_void;
+    fn CGEventGetLocation(event: *const c_void) -> CGPoint;
+    fn CFRelease(cf: *const c_void);
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+fn macos_mouse_position() -> Option<PhysicalPosition<f64>> {
+    let event = unsafe { CGEventCreate(std::ptr::null()) };
+    if event.is_null() {
+        return None;
+    }
+    let location = unsafe { CGEventGetLocation(event) };
+    unsafe { CFRelease(event) };
+    Some(PhysicalPosition::new(location.x, location.y))
 }
 
 #[cfg(target_os = "macos")]
@@ -2784,6 +2806,90 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String
     Ok(overlay)
 }
 
+fn monitor_contains_point(monitor: &tauri::Monitor, point: &PhysicalPosition<f64>) -> bool {
+    let x = point.x;
+    let y = point.y;
+    let left = monitor.position().x as f64;
+    let top = monitor.position().y as f64;
+    let right = left + monitor.size().width as f64;
+    let bottom = top + monitor.size().height as f64;
+    x >= left && x < right && y >= top && y < bottom
+}
+
+fn resolve_monitor_from_known_point(
+    monitors: &[tauri::Monitor],
+    point: PhysicalPosition<f64>,
+) -> Option<tauri::Monitor> {
+    if let Some(monitor) = monitors
+        .iter()
+        .find(|monitor| monitor_contains_point(monitor, &point))
+    {
+        return Some(monitor.clone());
+    }
+
+    let desktop_top = monitors.iter().map(|monitor| monitor.position().y).min()?;
+    let desktop_bottom = monitors
+        .iter()
+        .map(|monitor| monitor.position().y + monitor.size().height as i32)
+        .max()?;
+    let flipped = PhysicalPosition::new(point.x, desktop_top as f64 + desktop_bottom as f64 - point.y);
+
+    if let Some(monitor) = monitors
+        .iter()
+        .find(|monitor| monitor_contains_point(monitor, &flipped))
+    {
+        return Some(monitor.clone());
+    }
+
+    let x_matches: Vec<_> = monitors
+        .iter()
+        .filter(|monitor| {
+            let left = monitor.position().x as f64;
+            let right = left + monitor.size().width as f64;
+            point.x >= left && point.x < right
+        })
+        .cloned()
+        .collect();
+
+    if x_matches.len() == 1 {
+        return x_matches.into_iter().next();
+    }
+
+    None
+}
+
+fn resolve_overlay_monitor(
+    app: &AppHandle,
+    overlay: &tauri::WebviewWindow,
+) -> Option<tauri::Monitor> {
+    if let Ok(monitors) = app.available_monitors() {
+        #[cfg(target_os = "macos")]
+        if let Some(cursor) = macos_mouse_position() {
+            if let Some(monitor) = resolve_monitor_from_known_point(&monitors, cursor) {
+                return Some(monitor);
+            }
+        }
+
+        if let Ok(cursor) = app.cursor_position() {
+            if let Some(monitor) = resolve_monitor_from_known_point(&monitors, cursor) {
+                return Some(monitor);
+            }
+        }
+    }
+
+    if let Some(main) = app.get_webview_window("main") {
+        if let Ok(Some(monitor)) = main.current_monitor() {
+            return Some(monitor);
+        }
+    }
+
+    if let Ok(Some(monitor)) = overlay.current_monitor() {
+        return Some(monitor);
+    }
+
+    app.primary_monitor().ok().flatten()
+}
+
 fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Result<(), String> {
     let _ = overlay.set_size(Size::Logical(LogicalSize::new(
         OVERLAY_WIDTH,
@@ -2796,10 +2902,7 @@ fn place_overlay_window(app: &AppHandle, overlay: &tauri::WebviewWindow) -> Resu
         .map_err(|_| "failed to read overlay position settings".to_string())
         .map(|v| *v)?;
 
-    let monitor = app
-        .get_webview_window("main")
-        .and_then(|w| w.current_monitor().ok().flatten())
-        .or_else(|| app.primary_monitor().ok().flatten());
+    let monitor = resolve_overlay_monitor(app, overlay);
 
     if let Some(monitor) = monitor {
         let monitor_size = monitor.size();

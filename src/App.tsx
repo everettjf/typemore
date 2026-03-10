@@ -147,7 +147,7 @@ type TestCloudProviderResult = {
 
 const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
 const UPDATE_REMINDER_UNTIL_KEY = "typemore.update.remindUntil";
-const HOMEBREW_INSTALL_COMMAND = "brew install --cask everettjf/tap/typemore";
+const HOMEBREW_INSTALL_COMMAND = "brew update && brew install --cask everettjf/tap/typemore";
 const HOMEBREW_UPGRADE_COMMAND = "brew upgrade --cask typemore";
 const RELEASES_URL = "https://github.com/everettjf/typemore/releases";
 const RELEASES_API_LATEST_URL = "https://api.github.com/repos/everettjf/typemore/releases/latest";
@@ -2304,7 +2304,11 @@ function MainApp() {
         <aside className="tm-side flex min-h-0 flex-col rounded-2xl bg-white/95 p-3">
           <div className="px-2 pb-3 pt-1">
             <div className="flex items-center gap-2">
-              <img src="/favicon.png" alt="Type More" className="h-7 w-7 rounded-md" />
+              <img
+                src="/app-icon.png"
+                alt="Type More"
+                className="h-10 w-10 rounded-xl object-cover shadow-[0_10px_24px_rgba(14,116,144,0.22)] ring-1 ring-slate-200/80"
+              />
               <div className="text-2xl font-bold tracking-tight">Type More</div>
             </div>
           </div>

@@ -22,7 +22,7 @@ if (!isOverlayRoute) {
   splash.style.transition = "opacity 180ms ease";
   splash.innerHTML =
     '<div style="display:inline-flex;align-items:center;gap:12px;padding:14px 18px;border-radius:16px;border:1px solid rgba(148,163,184,0.26);background:rgba(255,255,255,0.88);box-shadow:0 12px 36px rgba(15,23,42,0.1);color:#0f172a;font-family:Avenir Next,SF Pro Rounded,SF Pro Text,PingFang SC,Segoe UI,sans-serif;">' +
-    '<img src="/favicon.png" alt="" width="20" height="20" />' +
+    '<img src="/app-icon.png" alt="" width="20" height="20" style="border-radius:6px;" />' +
     "<strong>Type More</strong>" +
     '<span style="width:10px;height:10px;border-radius:9999px;background:#1d4ed8;display:inline-block;"></span>' +
     "</div>";

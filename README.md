@@ -1,5 +1,7 @@
 # TypeMore
 
+[中文说明](./README.zh-CN.md)
+
 TypeMore is a macOS desktop app for offline speech-to-text. It captures your voice locally, runs speech recognition on-device, and pastes the result back into the active input with a low-friction hotkey workflow.
 
 ![TypeMore interface](./website/public/images/app-mockup.jpg)
@@ -28,7 +30,7 @@ This design keeps the critical path local. Cloud providers are optional and neve
 ### Homebrew
 
 ```bash
-brew install --cask everettjf/tap/typemore
+brew update && brew install --cask everettjf/tap/typemore
 ```
 
 Upgrade later with:
@@ -54,87 +56,6 @@ Download the latest notarized DMG from GitHub Releases:
 - Optional cloud optimization and translation
 - Startup update check with 7-day reminder
 
-## Tech Stack
-
-- Tauri v2
-- React 19 + TypeScript + Vite
-- Rust
-- sherpa-rs / sherpa-onnx
-- Radix UI + Tailwind CSS
-
-## Project Structure
-
-```text
-.
-├── src/                    # React frontend
-├── src-tauri/              # Rust backend and Tauri config
-├── scripts/                # Build and release helpers
-├── website/                # Landing page
-└── deploy.sh               # Release automation
-```
-
-## Development
-
-Install dependencies:
-
-```bash
-bun install
-```
-
-Run the desktop app in development:
-
-```bash
-bun run tauri dev
-```
-
-Run only the frontend:
-
-```bash
-bun run dev
-```
-
-## Build And Verify
-
-Frontend:
-
-```bash
-bun run build
-```
-
-Rust backend:
-
-```bash
-cd src-tauri && cargo check
-```
-
-Build DMG locally:
-
-```bash
-./scripts/build_dmg.sh
-```
-
-## Release
-
-`deploy.sh` is the canonical release script. It can:
-
-- bump the patch version automatically
-- build the signed macOS bundle
-- notarize and staple the DMG
-- create or update the GitHub release
-- update the Homebrew cask in `everettjf/homebrew-tap`
-
-Standard release:
-
-```bash
-./deploy.sh
-```
-
-Release the current version without bumping:
-
-```bash
-SKIP_BUMP=1 ./deploy.sh
-```
-
 ## Data Storage
 
 TypeMore stores runtime data under the Tauri app data directory, including:
@@ -144,6 +65,10 @@ TypeMore stores runtime data under the Tauri app data directory, including:
 - transcript cache
 - dictionary words
 - temporary conversion files
+
+## Contributing
+
+If you want to build, debug, or release TypeMore locally, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
