@@ -133,6 +133,8 @@ DMG_URL="https://github.com/$REPO_SLUG/releases/download/$TAG/TypeMore.dmg"
 RELEASE_BODY_FILE="$TMP_DIR/release-notes-$VERSION.md"
 RELEASE_DONE=0
 
+mkdir -p "$TMP_DIR"
+
 cleanup() {
   rm -f "$RELEASE_BODY_FILE"
   if [ "$RELEASE_DONE" -eq 0 ] && [ "$DID_BUMP" -eq 1 ]; then
