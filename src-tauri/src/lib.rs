@@ -118,7 +118,6 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
             if is_down && !was_down {
                 press_started_at = Some(Instant::now());
                 shift_seen = shift_down;
-                prev_shift_down = shift_down;
                 pressed_emitted = false;
                 active_action = None;
                 if fn_dictation_enabled || fn_translation_enabled {
@@ -184,7 +183,6 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                 }
                 press_started_at = None;
                 shift_seen = false;
-                prev_shift_down = false;
                 pressed_emitted = false;
             }
             prev_shift_down = shift_down;
