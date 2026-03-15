@@ -4,9 +4,10 @@ version = 4
 
 [[package]]
 name = "TypeMore"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "arboard",
+ "bzip2 0.6.1",
  "core-foundation",
  "cpal",
  "hound",
@@ -16,6 +17,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sherpa-rs",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
@@ -488,6 +490,15 @@ checksum = "bdb116a6ef3f6c3698828873ad02c3014b3c85cadb88496095628e3ef1e347f8"
 dependencies = [
  "bzip2-sys",
  "libc",
+]
+
+[[package]]
+name = "bzip2"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
+dependencies = [
+ "libbz2-rs-sys",
 ]
 
 [[package]]
@@ -2403,6 +2414,12 @@ dependencies = [
  "libloading 0.7.4",
  "once_cell",
 ]
+
+[[package]]
+name = "libbz2-rs-sys"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c4a545a15244c7d945065b5d392b2d2d7f21526fba56ce51467b06ed445e8f7"
 
 [[package]]
 name = "libc"
@@ -4361,7 +4378,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "591c9432b20f41d47f622a73c2888b188c321e313d820824df7d9fa51dbada43"
 dependencies = [
  "bindgen 0.69.5",
- "bzip2",
+ "bzip2 0.4.4",
  "cmake",
  "dirs 5.0.1",
  "flate2",

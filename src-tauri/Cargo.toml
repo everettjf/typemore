@@ -1,6 +1,6 @@
 [package]
 name = "TypeMore"
-version = "0.1.4"
+version = "0.1.5"
 description = "Type More With Your Voice"
 authors = ["you"]
 license = "Apache-2.0"
@@ -25,6 +25,8 @@ hound = "3.5"
 tauri-plugin-global-shortcut = "2.3.1"
 cpal = "0.15"
 rig-core = "0.31.0"
+bzip2 = "0.6.1"
+tar = "0.4.44"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"

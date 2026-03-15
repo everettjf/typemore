@@ -21,10 +21,12 @@ use walkdir::WalkDir;
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
+use bzip2::read::MultiBzDecoder;
 #[cfg(target_os = "macos")]
 use std::ffi::c_void;
 #[cfg(target_os = "macos")]
 use std::process::Stdio;
+use tar::Archive;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
@@ -1842,17 +1844,62 @@ fn move_cached_transcript_key(app: &AppHandle, from_id: &str, to_id: &str) -> Re
 
 fn extract_model_archive(archive_path: &Path, output_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(output_dir).map_err(|e| format!("failed to create extract dir: {e}"))?;
-    let status = Command::new("tar")
-        .arg("-xjf")
-        .arg(archive_path)
-        .arg("-C")
-        .arg(output_dir)
-        .status()
-        .map_err(|e| format!("failed to run tar: {e}"))?;
-    if !status.success() {
-        return Err("failed to extract model archive with tar".into());
-    }
+    let archive_file =
+        fs::File::open(archive_path).map_err(|e| format!("failed to open model archive: {e}"))?;
+    let decoder = MultiBzDecoder::new(archive_file);
+    let mut archive = Archive::new(decoder);
+    archive
+        .unpack(output_dir)
+        .map_err(|e| format!("failed to extract model archive: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_model_archive;
+    use bzip2::{write::BzEncoder, Compression};
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    use tar::Builder;
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("typemore-{name}-{suffix}"))
+    }
+
+    #[test]
+    fn extract_model_archive_unpacks_tar_bz2_without_external_tar() {
+        let root = unique_test_dir("extract-model-archive");
+        let input_dir = root.join("input");
+        let output_dir = root.join("output");
+        let archive_path = root.join("model.tar.bz2");
+
+        fs::create_dir_all(&input_dir).expect("create input dir");
+        fs::write(input_dir.join("tokens.txt"), "hello model").expect("write fixture");
+
+        let archive_file = fs::File::create(&archive_path).expect("create archive file");
+        let encoder = BzEncoder::new(archive_file, Compression::best());
+        let mut builder = Builder::new(encoder);
+        builder
+            .append_path_with_name(input_dir.join("tokens.txt"), "fixture/tokens.txt")
+            .expect("append tar entry");
+        let encoder = builder.into_inner().expect("finish tar builder");
+        encoder.finish().expect("finish bzip2 encoder");
+
+        extract_model_archive(&archive_path, &output_dir).expect("extract archive");
+
+        let extracted =
+            fs::read_to_string(output_dir.join("fixture").join("tokens.txt")).expect("read output");
+        assert_eq!(extracted, "hello model");
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 fn download_file_with_progress(
