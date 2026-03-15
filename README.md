@@ -2,7 +2,7 @@
 
 [中文说明](./README.zh-CN.md)
 
-TypeMore is a macOS desktop app for offline speech-to-text. It captures your voice locally, runs speech recognition on-device, and pastes the result back into the active input with a hotkey workflow.
+TypeMore is a macOS and Windows desktop app for offline speech-to-text. It captures your voice locally, runs speech recognition on-device, and pastes the result back into the active input with a hotkey workflow.
 
 
 <p align="center">
@@ -13,7 +13,7 @@ TypeMore is a macOS desktop app for offline speech-to-text. It captures your voi
 
 ## Why TypeMore
 
-- Offline first: audio stays on your Mac.
+- Offline first: audio stays on your device.
 - Native desktop workflow: global hotkeys, overlay feedback, recording history.
 - Open source: built with Tauri + React + Rust.
 - Practical for writing: dictation, cleanup, optional cloud post-processing, translation.
@@ -51,6 +51,14 @@ Download the latest notarized DMG from GitHub Releases:
 - Releases page: <https://github.com/everettjf/typemore/releases>
 - Latest DMG: <https://github.com/everettjf/typemore/releases/latest/download/TypeMore.dmg>
 
+### Windows Installer
+
+Build the Windows installer locally with Inno Setup:
+
+```powershell
+npm run build:win-installer
+```
+
 ## Community
 
 - Website: <https://typemore.app>
@@ -58,8 +66,8 @@ Download the latest notarized DMG from GitHub Releases:
 
 ## Features
 
-- Offline speech recognition on macOS
-- Built-in `Fn` / `Fn+Shift` trigger flow
+- Offline speech recognition on macOS and Windows
+- Built-in `Fn` / `Fn+Shift` trigger flow on macOS
 - Global custom hotkeys
 - Recording history with rename, delete, and re-transcribe
 - Dictionary support for custom words

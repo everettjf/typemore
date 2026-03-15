@@ -49,6 +49,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip,
 type Page = "home" | "history" | "dictionary" | "optimization" | "translation";
 type LangMode = "auto" | "zh-CN" | "en-US";
 type UiLang = "zh" | "en";
+type DesktopPlatform = "macos" | "windows" | "other";
 type CaptureTarget = "dictation" | "translation" | null;
 type HotkeyAction = "toggle-dictation" | "toggle-translation";
 type HotkeyEventState = "pressed" | "released";
@@ -152,8 +153,9 @@ const WEBSITE_URL = "https://typemore.app";
 const RELEASES_URL = "https://github.com/everettjf/typemore/releases";
 const RELEASES_API_LATEST_URL = "https://api.github.com/repos/everettjf/typemore/releases/latest";
 const RELEASES_API_LIST_URL = "https://api.github.com/repos/everettjf/typemore/releases?per_page=5";
-const DEFAULT_HOTKEY_DICTATION = "";
-const DEFAULT_HOTKEY_TRANSLATION = "";
+const DEFAULT_DESKTOP_PLATFORM = detectDesktopPlatform();
+const DEFAULT_HOTKEY_DICTATION = DEFAULT_DESKTOP_PLATFORM === "windows" ? "F8" : "";
+const DEFAULT_HOTKEY_TRANSLATION = DEFAULT_DESKTOP_PLATFORM === "windows" ? "F9" : "";
 const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
 const DEFAULT_OVERLAY_POSITION: OverlayPosition = "bottom";
 const DEFAULT_OUTPUT_MODE: OutputMode = "auto-paste";
@@ -709,6 +711,17 @@ function detectSystemLang(): UiLang {
   return lang.startsWith("zh") ? "zh" : "en";
 }
 
+function detectDesktopPlatform(): DesktopPlatform {
+  const platform = `${navigator.platform || ""} ${navigator.userAgent || ""}`.toLowerCase();
+  if (platform.includes("mac")) {
+    return "macos";
+  }
+  if (platform.includes("win")) {
+    return "windows";
+  }
+  return "other";
+}
+
 function resolveUiLangFromLocalSetting(): UiLang {
   const raw = window.localStorage.getItem(LANG_MODE_STORAGE_KEY);
   if (raw === "zh-CN") {
@@ -889,6 +902,7 @@ function OverlayWindowApp() {
 }
 
 function MainApp() {
+  const isMacPlatform = DEFAULT_DESKTOP_PLATFORM === "macos";
   const [page, setPage] = useState<Page>("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("language");
@@ -908,8 +922,8 @@ function MainApp() {
   const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
   const [hotkeyDictation, setHotkeyDictation] = useState(DEFAULT_HOTKEY_DICTATION);
   const [hotkeyTranslation, setHotkeyTranslation] = useState(DEFAULT_HOTKEY_TRANSLATION);
-  const [fnDictationEnabled, setFnDictationEnabled] = useState(true);
-  const [fnTranslationEnabled, setFnTranslationEnabled] = useState(true);
+  const [fnDictationEnabled, setFnDictationEnabled] = useState(isMacPlatform);
+  const [fnTranslationEnabled, setFnTranslationEnabled] = useState(isMacPlatform);
   const [triggerMode, setTriggerMode] = useState<HotkeyTriggerMode>(DEFAULT_TRIGGER_MODE);
   const [overlayPosition, setOverlayPosition] = useState<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
   const [outputMode, setOutputMode] = useState<OutputMode>(DEFAULT_OUTPUT_MODE);
@@ -993,6 +1007,44 @@ function MainApp() {
     return (key: keyof typeof dict, vars?: Record<string, string | number>) =>
       formatI18n(dict[key], vars);
   }, [uiLang]);
+  const hotkeyGuideDesc = useMemo(() => {
+    if (isMacPlatform) {
+      return t("statsEmptyGuideDesc");
+    }
+    return uiLang === "zh"
+      ? "1. 初始化模型  2. 聚焦输入框  3. 按已配置快捷键开始语音输入"
+      : "1. Initialize the model  2. Focus an input  3. Press your configured shortcut to start dictation";
+  }, [isMacPlatform, t, uiLang]);
+  const hotkeyTryHint = useMemo(() => {
+    if (isMacPlatform) {
+      return t("statsEmptyTryHint");
+    }
+    return uiLang === "zh"
+      ? "点击输入框后按已配置的听写快捷键开始测试。"
+      : "Focus the input and press your configured dictation shortcut to test.";
+  }, [isMacPlatform, t, uiLang]);
+  const builtInHotkeyHint = useMemo(() => {
+    if (isMacPlatform) {
+      return t("settingsHotkeyBuiltInHint");
+    }
+    return uiLang === "zh"
+      ? "Windows 上默认使用 F8（听写）和 F9（翻译）；也可按需修改。内置 Fn / Fn+Shift 仅在 macOS 可用。"
+      : "Windows defaults to F8 for dictation and F9 for translation. You can change them as needed. Built-in Fn / Fn+Shift shortcuts are only available on macOS.";
+  }, [isMacPlatform, t, uiLang]);
+  const fnHotkeyTitle = useMemo(() => {
+    if (isMacPlatform) {
+      return t("settingsFnKeyToggle");
+    }
+    return uiLang === "zh" ? "内置 Fn 快捷键（仅 macOS）" : "Built-in Fn shortcuts (macOS only)";
+  }, [isMacPlatform, t, uiLang]);
+  const fnHotkeyUnavailableHint = useMemo(() => {
+    if (isMacPlatform) {
+      return null;
+    }
+    return uiLang === "zh"
+      ? "当前运行在 Windows，上面的 Fn 开关不会生效。请使用全局快捷键。"
+      : "You are running on Windows. The Fn toggles above do not apply here; use global shortcuts instead.";
+  }, [isMacPlatform, uiLang]);
   const initProgressPercent = Math.max(0, Math.min(100, Math.round(Number(initStatus.progress || 0))));
   const initPhaseLabel = useMemo(() => {
     if (initStatus.phase === "download") {
@@ -1016,7 +1068,9 @@ function MainApp() {
   }, [uiLang]);
 
   function normalizeHotkeyLabel(value: string) {
-    return value.replace(/CommandOrControl/g, "Cmd/Ctrl").replace(/Alt/g, "Option/Alt");
+    return value
+      .replace(/CommandOrControl/g, isMacPlatform ? "Cmd/Ctrl" : "Ctrl")
+      .replace(/Alt/g, isMacPlatform ? "Option/Alt" : "Alt");
   }
 
   function canonicalHotkey(value: string) {
@@ -1032,15 +1086,17 @@ function MainApp() {
     if (!value.trim()) {
       return null;
     }
-    const knownConflicts = [
-      "CommandOrControl+Space",
-      "CommandOrControl+Tab",
-      "CommandOrControl+Q",
-      "CommandOrControl+W",
-      "CommandOrControl+M",
-      "CommandOrControl+H",
-      "CommandOrControl+`",
-    ];
+    const knownConflicts = isMacPlatform
+      ? [
+          "CommandOrControl+Space",
+          "CommandOrControl+Tab",
+          "CommandOrControl+Q",
+          "CommandOrControl+W",
+          "CommandOrControl+M",
+          "CommandOrControl+H",
+          "CommandOrControl+`",
+        ]
+      : ["CommandOrControl+Space", "Alt+Tab", "Alt+F4", "CommandOrControl+Esc"];
     const current = canonicalHotkey(value);
     const hit = knownConflicts.find((item) => canonicalHotkey(item) === current);
     return hit ?? null;
@@ -2464,9 +2520,9 @@ function MainApp() {
                         <div className="mx-auto mt-4 w-full max-w-[780px] text-left">
                           <div className="rounded-xl border border-slate-200 bg-white/95 p-4 shadow-sm">
                             <div className="text-sm font-semibold text-slate-800">{t("statsEmptyGuideTitle")}</div>
-                            <p className="mt-2 text-xs leading-6 text-slate-500">{t("statsEmptyGuideDesc")}</p>
+                            <p className="mt-2 text-xs leading-6 text-slate-500">{hotkeyGuideDesc}</p>
                             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                              {t("statsEmptyTryHint")}
+                              {hotkeyTryHint}
                             </div>
                           </div>
                         </div>
@@ -2941,7 +2997,7 @@ function MainApp() {
                   {settingsSection === "hotkey" && (
                   <Card className="tm-settings-card p-4">
                     <p className="text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
-                    <p className="mt-2 text-xs text-slate-500">{t("settingsHotkeyBuiltInHint")}</p>
+                    <p className="mt-2 text-xs text-slate-500">{builtInHotkeyHint}</p>
                     <p className="mt-2 text-xs text-slate-500">Recommended: keep dictation and translation shortcuts distinct to avoid accidental mode switching.</p>
                     <div className="mt-3 space-y-3">
                       <div>
@@ -3045,13 +3101,13 @@ function MainApp() {
                         </div>
                       )}
                       <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2">
-                        <div className="text-xs font-medium text-slate-600">{t("settingsFnKeyToggle")}</div>
+                        <div className="text-xs font-medium text-slate-600">{fnHotkeyTitle}</div>
                         <div className="mt-2 space-y-2">
                           <label className="flex items-center gap-2 text-sm text-slate-700">
                             <input
                               type="checkbox"
                               checked={fnDictationEnabled}
-                              disabled={savingHotkeys}
+                              disabled={savingHotkeys || !isMacPlatform}
                               onChange={(event) => {
                                 const nextDictationEnabled = event.target.checked;
                                 setFnDictationEnabled(nextDictationEnabled);
@@ -3065,7 +3121,7 @@ function MainApp() {
                             <input
                               type="checkbox"
                               checked={fnTranslationEnabled}
-                              disabled={savingHotkeys}
+                              disabled={savingHotkeys || !isMacPlatform}
                               onChange={(event) => {
                                 const nextTranslationEnabled = event.target.checked;
                                 setFnTranslationEnabled(nextTranslationEnabled);
@@ -3076,6 +3132,9 @@ function MainApp() {
                             <span>{t("settingsFnKeyTranslationToggle")}</span>
                           </label>
                         </div>
+                        {fnHotkeyUnavailableHint && (
+                          <p className="mt-2 text-xs text-slate-500">{fnHotkeyUnavailableHint}</p>
+                        )}
                       </div>
                       <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
                       <div className="flex gap-2">

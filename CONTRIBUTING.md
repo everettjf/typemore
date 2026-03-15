@@ -28,18 +28,20 @@ Install dependencies:
 
 ```bash
 bun install
+# or
+npm install
 ```
 
 Run the desktop app in development:
 
 ```bash
-bun run tauri dev
+npm run tauri dev
 ```
 
 Run only the frontend:
 
 ```bash
-bun run dev
+npm run dev
 ```
 
 ## Build And Verify
@@ -47,7 +49,7 @@ bun run dev
 Frontend:
 
 ```bash
-bun run build
+npm run build
 ```
 
 Rust backend:
@@ -60,6 +62,12 @@ Build the DMG locally:
 
 ```bash
 ./scripts/build_dmg.sh
+```
+
+Build the Windows installer locally:
+
+```powershell
+npm run build:win-installer
 ```
 
 ## Release

@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:dmg": "./scripts/build_dmg.sh",
+    "build:win-installer": "powershell -ExecutionPolicy Bypass -File .\\scripts\\build_windows_installer.ps1",
     "preview": "vite preview",
     "tauri": "tauri"
   },

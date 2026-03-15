@@ -6,12 +6,11 @@ use serde::{Deserialize, Serialize};
 use sherpa_rs::{paraformer::ParaformerConfig, paraformer::ParaformerRecognizer};
 use std::{
     collections::HashMap,
-    ffi::c_void,
     fs,
     io::{BufWriter, Cursor, Read, Seek, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::{mpsc, Arc, Mutex},
+    process::Command,
+    sync::{mpsc, Arc, Mutex, Once},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
@@ -19,6 +18,18 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutState};
 use walkdir::WalkDir;
+
+#[cfg(target_os = "windows")]
+use arboard::Clipboard;
+#[cfg(target_os = "macos")]
+use std::ffi::c_void;
+#[cfg(target_os = "macos")]
+use std::process::Stdio;
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
+    VIRTUAL_KEY, VK_CONTROL,
+};
 
 const MODEL_ARCHIVE_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-trilingual-zh-cantonese-en.tar.bz2";
 const MODEL_DIR_NAME: &str = "sherpa-model";
@@ -31,8 +42,18 @@ const INIT_EVENT: &str = "model-init-progress";
 const HOTKEY_EVENT: &str = "global-shortcut-triggered";
 const OVERLAY_EVENT: &str = "overlay-state";
 const RECORDING_SAVED_EVENT: &str = "recording-saved";
+#[cfg(target_os = "windows")]
+const HOTKEY_TOGGLE_DICTATION: &str = "F8";
+#[cfg(not(target_os = "windows"))]
 const HOTKEY_TOGGLE_DICTATION: &str = "";
+#[cfg(target_os = "windows")]
+const HOTKEY_TOGGLE_TRANSLATION: &str = "F9";
+#[cfg(not(target_os = "windows"))]
 const HOTKEY_TOGGLE_TRANSLATION: &str = "";
+#[cfg(target_os = "windows")]
+const PREVIOUS_WINDOWS_HOTKEY_DICTATION: &str = "CommandOrControl+Shift+F9";
+#[cfg(target_os = "windows")]
+const PREVIOUS_WINDOWS_HOTKEY_TRANSLATION: &str = "CommandOrControl+Shift+F10";
 const LEGACY_HOTKEY_DICTATION_V1: &str = "CommandOrControl+Alt+Space";
 const LEGACY_HOTKEY_TRANSLATION_V1: &str = "CommandOrControl+Alt+Enter";
 const LEGACY_HOTKEY_DICTATION_V2: &str = "CommandOrControl+Shift+S";
@@ -44,6 +65,7 @@ const OVERLAY_BOTTOM_MARGIN: i32 = 150;
 const OVERLAY_TOP_MARGIN: i32 = 90;
 const MAX_RECORDING_SECS: u64 = 90;
 const MAX_NON_IDLE_STUCK_SECS: u64 = 45;
+static PANIC_HOOK_ONCE: Once = Once::new();
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -202,8 +224,11 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
             } else if !is_down && was_down {
                 // For very quick taps, emit press on release so tap mode still works.
                 if !pressed_emitted {
-                    let action =
-                        choose_action(shift_seen || shift_down, fn_dictation_enabled, fn_translation_enabled);
+                    let action = choose_action(
+                        shift_seen || shift_down,
+                        fn_dictation_enabled,
+                        fn_translation_enabled,
+                    );
                     if let Some(action) = action {
                         eprintln!(
                             "[typemore][fn] pressed action={} shift={}",
@@ -211,7 +236,11 @@ fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
                             shift_seen || shift_down
                         );
                         active_action = Some(action);
-                        let shortcut = if shift_seen || shift_down { "Fn+Shift" } else { "Fn" };
+                        let shortcut = if shift_seen || shift_down {
+                            "Fn+Shift"
+                        } else {
+                            "Fn"
+                        };
                         emit_hotkey_event(&app_handle, action, shortcut, "pressed");
                         handle_native_hotkey_event(&app_handle, action, "pressed");
                     }
@@ -330,7 +359,7 @@ struct AppState {
     native_recorder_tx: Mutex<Option<mpsc::Sender<NativeRecorderCommand>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct HotkeyConfig {
     dictation: String,
     dictation_id: Option<u32>,
@@ -605,6 +634,34 @@ fn emit_recording_saved_event(app: &AppHandle, recording: &RecordingItem) {
     let _ = app.emit(RECORDING_SAVED_EVENT, payload);
 }
 
+fn startup_log_path() -> PathBuf {
+    std::env::temp_dir().join("TypeMore").join("startup.log")
+}
+
+fn append_startup_log(message: &str) {
+    let path = startup_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "[{timestamp}] {message}");
+    }
+}
+
+fn install_panic_log_hook() {
+    PANIC_HOOK_ONCE.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            append_startup_log(&format!("panic: {panic_info}"));
+            previous(panic_info);
+        }));
+    });
+}
+
 fn current_ui_language(app: &AppHandle) -> UiLanguage {
     app.state::<AppState>()
         .ui_language
@@ -683,11 +740,11 @@ struct CachedTranscript {
 type TranscriptCacheMap = HashMap<String, CachedTranscript>;
 
 const fn default_fn_dictation_enabled() -> bool {
-    true
+    cfg!(target_os = "macos")
 }
 
 const fn default_fn_translation_enabled() -> bool {
-    true
+    cfg!(target_os = "macos")
 }
 
 fn default_hotkey_dictation() -> String {
@@ -804,6 +861,12 @@ fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfi
 fn is_legacy_default_hotkeys(dictation: &str, translation: &str) -> bool {
     (dictation == LEGACY_HOTKEY_DICTATION_V1 && translation == LEGACY_HOTKEY_TRANSLATION_V1)
         || (dictation == LEGACY_HOTKEY_DICTATION_V2 && translation == LEGACY_HOTKEY_TRANSLATION_V2)
+}
+
+#[cfg(target_os = "windows")]
+fn is_previous_windows_default_hotkeys(dictation: &str, translation: &str) -> bool {
+    dictation == PREVIOUS_WINDOWS_HOTKEY_DICTATION
+        && translation == PREVIOUS_WINDOWS_HOTKEY_TRANSLATION
 }
 
 fn apply_hotkey_shortcuts(
@@ -1138,12 +1201,8 @@ fn split_camel_or_alnum_chunks(word: &str) -> Vec<String> {
         let next = chars.get(idx + 1).copied();
         let should_split = if let Some(prev_ch) = prev {
             (prev_ch.is_ascii_lowercase() && ch.is_ascii_uppercase())
-                || (prev_ch.is_ascii_alphabetic()
-                    && ch.is_ascii_digit()
-                    && !current.is_empty())
-                || (prev_ch.is_ascii_digit()
-                    && ch.is_ascii_alphabetic()
-                    && !current.is_empty())
+                || (prev_ch.is_ascii_alphabetic() && ch.is_ascii_digit() && !current.is_empty())
+                || (prev_ch.is_ascii_digit() && ch.is_ascii_alphabetic() && !current.is_empty())
                 || (prev_ch.is_ascii_uppercase()
                     && ch.is_ascii_uppercase()
                     && next.is_some_and(|n| n.is_ascii_lowercase())
@@ -1173,10 +1232,7 @@ fn apply_local_dictionary_terms(text: &str, dictionary_words: &[String]) -> Stri
         output = replace_case_insensitive(&output, normalized, normalized);
         let chunks = split_camel_or_alnum_chunks(normalized);
         if chunks.len() > 1 {
-            let lower_chunks = chunks
-                .iter()
-                .map(|s| s.to_lowercase())
-                .collect::<Vec<_>>();
+            let lower_chunks = chunks.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>();
             for sep in [" ", "-", "_"] {
                 let variant = lower_chunks.join(sep);
                 output = replace_case_insensitive(&output, &variant, normalized);
@@ -2327,9 +2383,6 @@ fn resolve_translation_target(app: &AppHandle, text: &str) -> &'static str {
 }
 
 fn type_text_to_focused_app_impl(app: &AppHandle, text: &str) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("type_text_to_focused_app is currently only supported on macOS".into());
-    }
     let output_mode = app
         .state::<AppState>()
         .output_mode
@@ -2337,7 +2390,7 @@ fn type_text_to_focused_app_impl(app: &AppHandle, text: &str) -> Result<(), Stri
         .map_err(|_| "failed to read output mode settings".to_string())
         .map(|v| *v)?;
 
-    let requires_accessibility = output_mode != OutputMode::CopyOnly;
+    let requires_accessibility = cfg!(target_os = "macos") && output_mode != OutputMode::CopyOnly;
     if requires_accessibility && !macos_is_accessibility_trusted() {
         return Err("accessibility permission not granted".into());
     }
@@ -2612,6 +2665,7 @@ fn macos_request_accessibility_permission() -> bool {
 #[tauri::command]
 fn get_accessibility_status() -> AccessibilityStatus {
     let ax_trusted = macos_is_accessibility_trusted();
+    let supported = cfg!(target_os = "macos");
     let current_exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
@@ -2624,13 +2678,9 @@ fn get_accessibility_status() -> AccessibilityStatus {
     } else {
         None
     };
-    let trusted = if cfg!(target_os = "macos") {
-        ax_trusted
-    } else {
-        false
-    };
+    let trusted = if supported { ax_trusted } else { true };
     AccessibilityStatus {
-        supported: cfg!(target_os = "macos"),
+        supported,
         trusted,
         ax_trusted,
         runtime_hint,
@@ -2643,6 +2693,7 @@ fn request_accessibility_permission() -> AccessibilityStatus {
         let _ = macos_request_accessibility_permission();
     }
     let ax_trusted = macos_is_accessibility_trusted();
+    let supported = cfg!(target_os = "macos");
     let current_exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(|s| s.to_string()))
@@ -2655,13 +2706,9 @@ fn request_accessibility_permission() -> AccessibilityStatus {
     } else {
         None
     };
-    let trusted = if cfg!(target_os = "macos") {
-        ax_trusted
-    } else {
-        false
-    };
+    let trusted = if supported { ax_trusted } else { true };
     AccessibilityStatus {
-        supported: cfg!(target_os = "macos"),
+        supported,
         trusted,
         ax_trusted,
         runtime_hint,
@@ -2692,6 +2739,7 @@ fn open_accessibility_settings() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn run_osascript(script: &str) -> Result<(), String> {
     let status = Command::new("osascript")
         .arg("-e")
@@ -2704,6 +2752,7 @@ fn run_osascript(script: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn pbcopy_text(text: &str) -> Result<(), String> {
     let mut child = Command::new("pbcopy")
         .stdin(Stdio::piped())
@@ -2725,6 +2774,7 @@ fn pbcopy_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn type_text_via_paste(
     text: &str,
     keep_result_in_clipboard: bool,
@@ -2752,6 +2802,79 @@ fn type_text_via_paste(
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_write_clipboard_text(text: &str) -> Result<(), String> {
+    let mut clipboard = Clipboard::new().map_err(|e| format!("failed to access clipboard: {e}"))?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| format!("failed to write clipboard text: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_keyboard_input(vk: VIRTUAL_KEY, flags: KEYBD_EVENT_FLAGS) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_send_ctrl_v() -> Result<(), String> {
+    let inputs = [
+        windows_keyboard_input(VK_CONTROL, KEYBD_EVENT_FLAGS(0)),
+        windows_keyboard_input(VIRTUAL_KEY(b'V' as u16), KEYBD_EVENT_FLAGS(0)),
+        windows_keyboard_input(VIRTUAL_KEY(b'V' as u16), KEYEVENTF_KEYUP),
+        windows_keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
+    ];
+
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        return Err(format!("failed to send paste shortcut: sent {sent} events"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn type_text_via_paste(
+    text: &str,
+    keep_result_in_clipboard: bool,
+    do_paste: bool,
+) -> Result<(), String> {
+    let previous_clipboard = Clipboard::new()
+        .ok()
+        .and_then(|mut clipboard| clipboard.get_text().ok());
+
+    windows_write_clipboard_text(text)?;
+    if do_paste {
+        windows_send_ctrl_v()?;
+    }
+
+    if !keep_result_in_clipboard {
+        if do_paste {
+            std::thread::sleep(Duration::from_millis(180));
+        }
+        windows_write_clipboard_text(previous_clipboard.as_deref().unwrap_or(""))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn type_text_via_paste(
+    _text: &str,
+    _keep_result_in_clipboard: bool,
+    _do_paste: bool,
+) -> Result<(), String> {
+    Err("type_text_to_focused_app is currently only supported on macOS and Windows".into())
 }
 
 #[tauri::command]
@@ -2832,7 +2955,10 @@ fn resolve_monitor_from_known_point(
         .iter()
         .map(|monitor| monitor.position().y + monitor.size().height as i32)
         .max()?;
-    let flipped = PhysicalPosition::new(point.x, desktop_top as f64 + desktop_bottom as f64 - point.y);
+    let flipped = PhysicalPosition::new(
+        point.x,
+        desktop_top as f64 + desktop_bottom as f64 - point.y,
+    );
 
     if let Some(monitor) = monitors
         .iter()
@@ -3038,6 +3164,11 @@ fn set_fn_key_modes(
     dictation_enabled: bool,
     translation_enabled: bool,
 ) -> Result<HotkeySettings, String> {
+    let (dictation_enabled, translation_enabled) = if cfg!(target_os = "macos") {
+        (dictation_enabled, translation_enabled)
+    } else {
+        (false, false)
+    };
     let state = app.state::<AppState>();
     {
         let mut dictation_lock = state
@@ -3174,7 +3305,13 @@ fn process_text_with_cloud(
     translate: bool,
     target_lang: Option<String>,
 ) -> Result<CloudProcessResult, String> {
-    Ok(run_cloud_pipeline(&app, &text, translate, target_lang, None))
+    Ok(run_cloud_pipeline(
+        &app,
+        &text,
+        translate,
+        target_lang,
+        None,
+    ))
 }
 
 #[tauri::command]
@@ -3261,7 +3398,12 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                         None,
                     );
                     // Show listening immediately on hotkey press, independent of voice activity.
-                    let _ = emit_overlay_state(&app_handle, "listening", Some(action.clone()), Some(0.0));
+                    let _ = emit_overlay_state(
+                        &app_handle,
+                        "listening",
+                        Some(action.clone()),
+                        Some(0.0),
+                    );
                     if let Err(err) = start_native_recording_internal(&mut recorder, &app_handle) {
                         eprintln!(
                             "[typemore][recorder] start failed action={} error={}",
@@ -3709,6 +3851,7 @@ fn handle_native_hotkey_event(app: &AppHandle, action: &str, state: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_log_hook();
     tauri::Builder::default()
         .manage(AppState::default())
         .plugin(
@@ -3744,12 +3887,23 @@ pub fn run() {
         .setup(|app| {
             let mut persisted = load_persisted_hotkeys(app.handle())?;
             if let Some(saved) = persisted.as_mut() {
-                if is_legacy_default_hotkeys(saved.dictation.trim(), saved.translation.trim()) {
+                if cfg!(target_os = "macos")
+                    && is_legacy_default_hotkeys(saved.dictation.trim(), saved.translation.trim())
+                {
                     eprintln!(
                         "[typemore] migrate legacy built-in hotkeys to empty defaults (Fn-only)"
                     );
                     saved.dictation.clear();
                     saved.translation.clear();
+                }
+                #[cfg(target_os = "windows")]
+                if is_previous_windows_default_hotkeys(
+                    saved.dictation.trim(),
+                    saved.translation.trim(),
+                ) {
+                    eprintln!("[typemore] migrate windows built-in hotkeys to F8/F9 defaults");
+                    saved.dictation = HOTKEY_TOGGLE_DICTATION.to_string();
+                    saved.translation = HOTKEY_TOGGLE_TRANSLATION.to_string();
                 }
             }
             let persisted_cloud = load_persisted_cloud_settings(app.handle()).unwrap_or_else(|err| {
@@ -3764,10 +3918,12 @@ pub fn run() {
             let fn_dictation_enabled = persisted
                 .as_ref()
                 .map(|saved| saved.fn_dictation_enabled)
+                .filter(|_| cfg!(target_os = "macos"))
                 .unwrap_or_else(default_fn_dictation_enabled);
             let fn_translation_enabled = persisted
                 .as_ref()
                 .map(|saved| saved.fn_translation_enabled)
+                .filter(|_| cfg!(target_os = "macos"))
                 .unwrap_or_else(default_fn_translation_enabled);
             let trigger_mode = persisted
                 .as_ref()
@@ -3803,23 +3959,62 @@ pub fn run() {
                 },
                 None => build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?,
             };
+            let default_cfg = build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?;
+            let empty_cfg = build_hotkey_config("", "")?;
 
-            if let Err(err) = apply_hotkey_shortcuts(app.handle(), desired_cfg.clone()) {
-                eprintln!(
-                    "[typemore] failed to register hotkeys ('{}', '{}'): {}. fallback to default",
-                    desired_cfg.dictation, desired_cfg.translation, err
-                );
-                let fallback =
-                    build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?;
-                apply_hotkey_shortcuts(app.handle(), fallback)?;
-            }
+            let active_hotkeys = match apply_hotkey_shortcuts(app.handle(), desired_cfg.clone()) {
+                Ok(cfg) => cfg,
+                Err(err) => {
+                    let message = format!(
+                        "[typemore] failed to register hotkeys ('{}', '{}'): {}",
+                        desired_cfg.dictation, desired_cfg.translation, err
+                    );
+                    eprintln!("{message}");
+                    append_startup_log(&message);
 
-            if let Ok(lock) = app.state::<AppState>().hotkeys.lock() {
-                eprintln!(
-                    "[typemore] active hotkeys: dictation='{}', translation='{}'",
-                    lock.dictation, lock.translation
-                );
-            }
+                    if desired_cfg != default_cfg {
+                        match apply_hotkey_shortcuts(app.handle(), default_cfg.clone()) {
+                            Ok(cfg) => {
+                                let fallback_message = format!(
+                                    "[typemore] fallback to default hotkeys ('{}', '{}')",
+                                    cfg.dictation, cfg.translation
+                                );
+                                eprintln!("{fallback_message}");
+                                append_startup_log(&fallback_message);
+                                cfg
+                            }
+                            Err(default_err) => {
+                                let default_message = format!(
+                                    "[typemore] default hotkeys unavailable ('{}', '{}'): {}",
+                                    default_cfg.dictation, default_cfg.translation, default_err
+                                );
+                                eprintln!("{default_message}");
+                                append_startup_log(&default_message);
+                                let cfg = apply_hotkey_shortcuts(app.handle(), empty_cfg.clone())?;
+                                append_startup_log(
+                                    "[typemore] started without global hotkeys because all configured shortcuts were unavailable",
+                                );
+                                cfg
+                            }
+                        }
+                    } else {
+                        let cfg = apply_hotkey_shortcuts(app.handle(), empty_cfg.clone())?;
+                        append_startup_log(
+                            "[typemore] started without global hotkeys because default shortcuts were unavailable",
+                        );
+                        cfg
+                    }
+                }
+            };
+
+            eprintln!(
+                "[typemore] active hotkeys: dictation='{}', translation='{}'",
+                active_hotkeys.dictation, active_hotkeys.translation
+            );
+            append_startup_log(&format!(
+                "[typemore] active hotkeys: dictation='{}', translation='{}'",
+                active_hotkeys.dictation, active_hotkeys.translation
+            ));
             if let Ok(mut lock) = app.state::<AppState>().fn_dictation_enabled.lock() {
                 *lock = fn_dictation_enabled;
             }
