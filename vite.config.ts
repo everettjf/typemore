@@ -25,8 +25,15 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // Avoid following repo-local symlinks such as tmp/dmg-stage/Applications -> /Applications.
+      followSymlinks: false,
+      // Keep the dev watcher scoped to app sources instead of generated/temp directories.
+      ignored: [
+        "**/src-tauri/**",
+        "**/dist/**",
+        "**/tmp/**",
+        "**/website/**",
+      ],
     },
   },
 }));
