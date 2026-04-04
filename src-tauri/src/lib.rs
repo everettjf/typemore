@@ -2835,12 +2835,16 @@ fn type_text_via_paste(
 
     pbcopy_text(text)?;
     if do_paste {
+        // Small delay to let any pending main-thread overlay operations settle,
+        // preventing focus stealing right before the keystroke.
+        std::thread::sleep(Duration::from_millis(50));
         run_osascript("tell application \"System Events\" to keystroke \"v\" using command down")?;
     }
 
     if !keep_result_in_clipboard {
         if do_paste {
-            std::thread::sleep(Duration::from_millis(180));
+            // Wait long enough for the target app to fully process the paste.
+            std::thread::sleep(Duration::from_millis(300));
         }
         if let Some(prev) = previous_clipboard {
             let _ = pbcopy_text(&prev);
@@ -2903,12 +2907,13 @@ fn type_text_via_paste(
 
     windows_write_clipboard_text(text)?;
     if do_paste {
+        std::thread::sleep(Duration::from_millis(50));
         windows_send_ctrl_v()?;
     }
 
     if !keep_result_in_clipboard {
         if do_paste {
-            std::thread::sleep(Duration::from_millis(180));
+            std::thread::sleep(Duration::from_millis(300));
         }
         windows_write_clipboard_text(previous_clipboard.as_deref().unwrap_or(""))?;
     }
@@ -3130,7 +3135,9 @@ fn emit_overlay_state_on_main_thread(
         return Ok(());
     } else {
         let _ = place_overlay_window(app, &overlay);
-        let _ = overlay.unminimize();
+        // NOTE: Do NOT call overlay.unminimize() here — the overlay is never minimized
+        // (only hidden/shown), and unminimize can activate the app, stealing focus from
+        // the target window and breaking paste-via-Cmd+V.
         let _ = overlay.show();
         let _ = overlay.set_always_on_top(true);
         let _ = overlay.set_visible_on_all_workspaces(true);
