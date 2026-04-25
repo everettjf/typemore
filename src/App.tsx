@@ -14,13 +14,11 @@ import {
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 import {
-  BookText,
   Check,
   Copy,
   FolderOpen,
   History,
   Home,
-  Languages,
   Loader2,
   Pencil,
   Plus,
@@ -43,21 +41,25 @@ import { ScrollArea } from "./components/ui/scroll-area";
 import { Separator } from "./components/ui/separator";
 import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/utils";
+import {
+  LANG_MODE_STORAGE_KEY,
+  detectSystemLang,
+  type UiLang,
+} from "./lib/lang";
+import { I18N, formatI18n } from "./i18n";
+import { OverlayWindowApp } from "./components/overlay/OverlayWindow";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
-type Page = "home" | "history" | "dictionary" | "optimization" | "translation";
+type Page = "home" | "history";
 type LangMode = "auto" | "zh-CN" | "en-US";
-type UiLang = "zh" | "en";
 type DesktopPlatform = "macos" | "windows" | "other";
-type CaptureTarget = "dictation" | "translation" | null;
-type HotkeyAction = "toggle-dictation" | "toggle-translation";
+type CaptureTarget = "dictation" | null;
+type HotkeyAction = "toggle-dictation";
 type HotkeyEventState = "pressed" | "released";
-type HotkeyTriggerMode = "tap" | "long-press";
 type OverlayPosition = "top" | "bottom";
 type OutputMode = "auto-paste" | "paste-and-keep" | "copy-only";
-type TranslationTargetLang = "auto" | "en" | "zh-CN" | "ja" | "ko";
-type SettingsSection = "language" | "hotkey" | "processing" | "providers" | "temp" | "about";
+type SettingsSection = "hotkey" | "model" | "pipeline" | "temp" | "about";
 type UpdateCheckState = "idle" | "checking" | "available" | "latest" | "error";
 type CloudVendor =
   | "openai"
@@ -88,20 +90,10 @@ type GlobalShortcutPayload = {
 
 type HotkeySettings = {
   dictation: string;
-  translation: string;
-  fnDictationEnabled: boolean;
-  fnTranslationEnabled: boolean;
-  triggerMode: HotkeyTriggerMode;
+  doubleTapEnabled: boolean;
   overlayPosition: OverlayPosition;
   outputMode: OutputMode;
-  translationTarget: TranslationTargetLang;
   uiLanguage?: "zh" | "en";
-};
-
-type OverlayStatePayload = {
-  phase: "hidden" | "listening" | "thinking" | "ready";
-  text?: string | null;
-  level?: number | null;
 };
 
 type RecordingSavedPayload = {
@@ -146,7 +138,27 @@ type TestCloudProviderResult = {
   message: string;
 };
 
-const LANG_MODE_STORAGE_KEY = "typemore.lang.mode";
+type AsrProviderKind = "local-sherpa" | "openai-whisper" | "groq-whisper" | "openai-compatible";
+
+type AsrSettings = {
+  provider: AsrProviderKind;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+};
+
+type TestAsrResult = {
+  ok: boolean;
+  message: string;
+};
+
+const DEFAULT_ASR_SETTINGS: AsrSettings = {
+  provider: "local-sherpa",
+  apiKey: "",
+  baseUrl: "",
+  model: "whisper-1",
+};
+
 const UPDATE_REMINDER_UNTIL_KEY = "typemore.update.remindUntil";
 const HOMEBREW_UPGRADE_COMMAND = "brew upgrade --cask typemore";
 const WEBSITE_URL = "https://typemore.app";
@@ -154,9 +166,7 @@ const RELEASES_URL = "https://github.com/everettjf/typemore/releases";
 const RELEASES_API_LATEST_URL = "https://api.github.com/repos/everettjf/typemore/releases/latest";
 const RELEASES_API_LIST_URL = "https://api.github.com/repos/everettjf/typemore/releases?per_page=5";
 const DEFAULT_DESKTOP_PLATFORM = detectDesktopPlatform();
-const DEFAULT_HOTKEY_DICTATION = DEFAULT_DESKTOP_PLATFORM === "windows" ? "F8" : "";
-const DEFAULT_HOTKEY_TRANSLATION = DEFAULT_DESKTOP_PLATFORM === "windows" ? "F9" : "";
-const DEFAULT_TRIGGER_MODE: HotkeyTriggerMode = "tap";
+const DEFAULT_HOTKEY_DICTATION = "";
 const DEFAULT_OVERLAY_POSITION: OverlayPosition = "bottom";
 const DEFAULT_OUTPUT_MODE: OutputMode = "auto-paste";
 const BACKEND_NATIVE_HOTKEY_PIPELINE = true;
@@ -211,471 +221,6 @@ const CLOUD_VENDOR_KEY_GUIDES: Record<CloudVendor, string | null> = {
   ollama: null,
 };
 
-const I18N = {
-  zh: {
-    navHome: "首页",
-    navHistory: "历史",
-    navDictionary: "词库",
-    navOptimization: "优化",
-    navTranslation: "翻译",
-    navTestInput: "测试输入",
-    navSettings: "设置",
-    titleHome: "用你的声音，打出更多文字。",
-    subHome: "开源、离线优先，支持 BYOD（Bring Your Own Key）的语音转写工作流。",
-    featureOpenSource: "Open Source",
-    featureOfflineFirst: "Offline First",
-    featureByod: "BYOD",
-    statsDailyInputTitle: "输入趋势",
-    statsDailyInputDesc: "基于历史录音与缓存文本自动统计最近 30 天数据。",
-    statsToday: "今日",
-    statsDailyAvg: "日均",
-    statsMonthTotal: "本月输入",
-    statsYearTotal: "本年输入",
-    statsTotal: "累计输入",
-    statsUnitChars: "字",
-    statsVersion: "版本",
-    statsEmptyTitle: "还没有统计数据",
-    statsEmptyDesc: "首次使用时，先进行一次录音识别。识别后这里会自动展示真实趋势与统计。",
-    statsEmptyInitModel: "初始化模型",
-    statsEmptyTryNow: "立即测试",
-    statsEmptyGuideTitle: "首次使用指引",
-    statsEmptyGuideDesc: "1. 初始化模型  2. 聚焦输入框  3. 按 Fn（或 Fn+Shift）开始语音输入",
-    statsEmptyTryHint: "点击输入框后按 Fn（或 Fn+Shift）开始测试。",
-    statsEmptyInputPlaceholder: "这里是测试输入区，识别结果会自动粘贴到当前焦点位置。",
-    updateAvailableTitle: "发现新版本",
-    updateAvailableDesc: "当前 {current}，最新 {latest}。",
-    updateAvailableHelp: "可通过 Homebrew 更新，或访问官网查看最新安装说明。",
-    updateOpenRelease: "打开官网",
-    updateDownloadDmg: "下载 DMG",
-    updateCopyBrew: "复制 Homebrew 更新命令",
-    updateCopyBrewOk: "已复制：brew upgrade --cask typemore",
-    updateCopyBrewFailed: "复制失败: {error}",
-    updateRemindLater: "7 天后提醒",
-    updateCheckButton: "检查更新",
-    updateChecking: "检查中...",
-    updateStatusIdle: "点击按钮检查最新版本。",
-    updateStatusLatest: "当前已是最新版本。",
-    updateStatusAvailable: "发现新版本，可直接升级或下载最新 DMG。",
-    updateStatusError: "检查失败: {error}",
-    updateCurrentVersion: "当前版本",
-    updateLatestVersion: "最新版本",
-    updateVersionUnknown: "未检查",
-    modelReady: "模型已就绪",
-    modelInitializing: "初始化中",
-    modelNotReady: "模型未就绪",
-    stopRecording: "停止录音",
-    startRecording: "开始录音",
-    initModelRunning: "初始化中...",
-    initModelReady: "模型已就绪",
-    initModelStart: "初始化模型",
-    modelInitModalTitle: "正在准备本地模型",
-    modelInitModalDesc: "首次下载通常需要几分钟，窗口会在完成后自动关闭。",
-    modelInitModalKeepTip: "你可以保持当前页面打开，完成后即可直接开始录音。",
-    modelInitPhaseDownload: "下载模型文件",
-    modelInitPhaseExtract: "解压模型文件",
-    modelInitPhaseScan: "校验模型完整性",
-    modelInitPhaseDone: "初始化完成",
-    statsEmptyQuickTestTitle: "快速测试输入",
-    testInputTitle: "测试输入",
-    testInputDesc: "聚焦输入框后按 Fn（或 Fn+Shift）即可体验识别后的自动输入效果。",
-    testInputDictationBtn: "测试听写",
-    testInputTranslationBtn: "测试翻译",
-    testInputStopBtn: "停止",
-    testInputModeHint: "点击“测试翻译”会触发 translation 链路（Processing -> Optimizing -> Translating）。",
-    viewHistory: "查看历史",
-    recentRecordings: "最近录音",
-    noRecordings: "还没有录音记录，先初始化模型并开始录音。",
-    countItems: "{count} 条",
-    historyTitle: "历史",
-    historyRefresh: "刷新",
-    historySelectAll: "全选",
-    historyClearSelection: "取消全选",
-    historyDeleteSelected: "删除所选",
-    historySelectedCount: "已选 {count} 条",
-    historyDeleteSelectedConfirm: "确认删除已选中的 {count} 条录音吗？此操作不可恢复。",
-    rename: "重命名",
-    delete: "删除",
-    retranscribe: "重新识别",
-    copyResult: "复制结果",
-    currentRecording: "当前录音: {time}",
-    noSelectedRecording: "当前未选中录音",
-    transcriptPlaceholder: "识别结果会显示在这里...",
-    dictionaryTitle: "词库",
-    dictionaryWords: "{count} 个词",
-    dictionaryPlaceholder: "添加新词，比如 TypeMore",
-    dictionaryAdd: "添加词条",
-    dictionaryOptimizeHint: "词库仅在启用 Processing 并执行 Optimizing 时生效。",
-    dictionaryEmpty: "还没有词条，先添加几个常用专有名词。",
-    dictionaryDelete: "删除词条",
-    settingsTitle: "设置",
-    settingsSectionGeneral: "通用",
-    settingsSectionLanguage: "语言",
-    settingsSectionHotkey: "快捷键",
-    settingsSectionCloud: "处理",
-    settingsSectionProviders: "模型厂商",
-    settingsSectionTemp: "临时目录",
-    settingsSectionAbout: "关于",
-    settingsTempDirTitle: "临时目录",
-    settingsTempDirDesc: "打开应用的临时目录，用于查看当前运行过程中的临时文件。",
-    settingsOpenTempDir: "打开临时目录",
-    settingsProjectInfo: "项目信息",
-    settingsProjectWebsite: "官网",
-    settingsProjectGithub: "开源仓库",
-    settingsProjectMoreApps: "更多 App",
-    settingsProjectLicense: "协议",
-    settingsInstallTitle: "检查更新",
-    settingsInstallDesc: "通过 Homebrew tap 检查是否有新版本可用。",
-    settingsInstallCommand: "安装命令",
-    settingsUpgradeCommand: "升级命令",
-    settingsCopyInstall: "复制安装命令",
-    settingsCopyUpgrade: "复制升级命令",
-    settingsCopyInstallOk: "已复制安装命令",
-    settingsCopyUpgradeOk: "已复制升级命令",
-    settingsCopyCommandFailed: "复制命令失败: {error}",
-    settingsLanguageTitle: "语言",
-    settingsLanguageDesc: "支持自动跟随系统语言，也可以手动切换。",
-    settingsHotkeyTitle: "全局快捷键",
-    settingsHotkeyDesc: "支持点按切换（按一次开始/停止）和长按模式（按下开始、松开停止）。",
-    settingsHotkeyBuiltInHint: "内置快捷键可留空（仅使用 Fn / Fn+Shift）。也可按需单独设置听写或翻译快捷键。",
-    settingsHotkeyDictation: "听写快捷键",
-    settingsHotkeyTranslation: "翻译快捷键",
-    settingsFnKeyToggle: "启用 Fn 内置快捷键（macOS）",
-    settingsFnKeyDictationToggle: "启用 Fn（听写）",
-    settingsFnKeyTranslationToggle: "启用 Fn+Shift（翻译）",
-    settingsHotkeyTogglePlaceholder: "例如: CommandOrControl+Alt+Space",
-    settingsHotkeySave: "保存快捷键",
-    settingsHotkeyReset: "恢复默认",
-    settingsHotkeyRecord: "录制",
-    settingsHotkeyRecording: "录制中...",
-    settingsHotkeyPressHint: "点击“录制”后直接按组合键；按 Esc 取消。",
-    settingsTriggerMode: "触发模式",
-    settingsTriggerModeTap: "点按切换",
-    settingsTriggerModeLongPress: "长按松开结束",
-    settingsOverlayPosition: "悬浮窗位置",
-    settingsOverlayPositionTop: "顶部",
-    settingsOverlayPositionBottom: "底部",
-    settingsOutputMode: "发送方式",
-    settingsOutputModeAutoPaste: "自动粘贴并恢复剪贴板",
-    settingsOutputModePasteAndKeep: "自动粘贴并保留结果到剪贴板",
-    settingsOutputModeCopyOnly: "仅复制到剪贴板（不自动粘贴）",
-    settingsHotkeyConflictTitle: "快捷键冲突",
-    settingsHotkeyConflictSame: "听写快捷键与翻译快捷键不能相同。",
-    settingsHotkeyConflictWithSystem: "与系统常用快捷键冲突：{value}",
-    settingsHotkeyWarningSaveBlocked: "请先修复冲突再保存。",
-    settingsTranslationTarget: "翻译目标语言",
-    settingsTranslationTargetAuto: "自动（中英互转）",
-    settingsTranslationTargetEn: "英文",
-    settingsTranslationTargetZh: "中文",
-    settingsTranslationTargetJa: "日文",
-    settingsTranslationTargetKo: "韩文",
-    settingsCloudTitle: "处理",
-    settingsCloudDesc: "将本地识别结果交给云端做二次优化与翻译。建议先在“模型厂商”里配置可用模型。",
-    settingsCloudGuide: "处理顺序：本地识别 -> 云端优化 -> (翻译快捷键时) 云端翻译。任一步失败会自动回退到上一步结果。",
-    settingsCloudEnabled: "启用云端后处理",
-    settingsCloudOptimizeProvider: "优化模型",
-    settingsCloudTranslateProvider: "翻译模型",
-    settingsCloudTargetLanguage: "云端目标语言",
-    settingsCloudOptimizePrompt: "优化 Prompt",
-    settingsCloudTranslatePrompt: "翻译 Prompt",
-    settingsCloudOptimizeSection: "优化阶段",
-    settingsCloudTranslateSection: "翻译阶段",
-    settingsCloudOptimizeDesc: "用于修复 ASR 文本中的标点、分词和识别错误。",
-    settingsCloudTranslateDesc: "仅在翻译快捷键触发时执行，输出为目标语言结果。",
-    settingsCloudTimeoutMs: "请求超时(ms)",
-    settingsCloudRetries: "失败重试次数",
-    settingsCloudProviders: "厂商列表",
-    settingsCloudProviderVendor: "厂商",
-    settingsCloudProviderModel: "模型",
-    settingsCloudProviderApiKey: "API Key",
-    settingsCloudProviderApiKeyHint: "到厂商控制台创建并粘贴 API Key",
-    settingsCloudProviderApiKeyDocs: "注册/获取 API Key",
-    settingsCloudProviderNoApiKeyNeeded: "Ollama 本地运行，无需 API Key",
-    settingsCloudProviderBaseUrl: "Base URL(可选)",
-    settingsCloudProviderEnabled: "启用",
-    settingsCloudAddProvider: "新增厂商",
-    settingsCloudRemoveProvider: "删除",
-    settingsCloudSave: "保存",
-    settingsCloudTest: "测试连接",
-    settingsCloudTesting: "测试中...",
-    settingsCloudTestOk: "连接成功",
-    settingsCloudTestFailed: "连接失败",
-    toastSaved: "保存成功",
-    toastSaveFailed: "保存失败: {error}",
-    settingsCloudNoProviderHint: "暂无可用模型。请先到“模型厂商”新增并保存，再返回这里选择。",
-    settingsProvidersTitle: "模型厂商",
-    settingsProvidersDesc: "每条配置是一个可调用模型（厂商 + 模型）。优化/翻译会从这里选择。",
-    settingsProvidersGuide: "建议先添加 1 个优化模型，再按需添加 1 个翻译模型。",
-    settingsProvidersSave: "保存厂商配置",
-    transcriptCloudProcessFailed: "云端处理失败，已回退本地结果: {error}",
-    languageModeLabel: "界面语言",
-    langAuto: "自动（跟随系统）",
-    langZh: "中文",
-    langEn: "English",
-    accessTitle: "辅助功能权限",
-    accessNeed: "要在任意应用中输入文字，请先授予 macOS 辅助功能权限。",
-    accessGranted: "权限已开启，可向其他应用输入文字。",
-    accessRequest: "请求权限",
-    accessOpenSettings: "打开系统设置",
-    accessRefresh: "刷新状态",
-    recordingPrefix: "录音",
-    transcriptInitFailed: "初始化失败: {error}",
-    transcriptListenFailed: "监听模型进度失败: {error}",
-    transcriptModelReady: "模型已就绪，可以开始录音识别。",
-    transcriptModelInitFailed: "模型初始化失败: {error}",
-    transcriptInitInProgress: "模型初始化中，请稍后再按一次快捷键。",
-    transcriptRecordingFailed: "录音识别失败: {error}",
-    transcriptNeedInit: "请先初始化模型，再开始录音。",
-    transcriptNeedSelect: "请先在左侧选择一个录音。",
-    transcriptRetryFailed: "识别失败: {error}",
-    transcriptCopyFailed: "[复制失败] {error}",
-    transcriptRenameFailed: "重命名失败: {error}",
-    transcriptDeleteFailed: "删除失败: {error}",
-    transcriptOpenTempDirOk: "已打开临时目录: {dir}",
-    transcriptOpenTempDirFailed: "打开临时目录失败: {error}",
-    transcriptTypeFailed: "输入到当前应用失败: {error}",
-    transcriptTranslating: "翻译中...",
-    transcriptTranslationFailed: "翻译失败，已回退原文: {error}",
-    fallbackTitle: "未能自动输入",
-    fallbackDesc: "请点击复制后手动粘贴到目标输入框。",
-    fallbackCopy: "复制识别结果",
-    fallbackClose: "关闭",
-  },
-  en: {
-    navHome: "Home",
-    navHistory: "History",
-    navDictionary: "Dictionary",
-    navOptimization: "Optimization",
-    navTranslation: "Translation",
-    navTestInput: "Test Input",
-    navSettings: "Settings",
-    titleHome: "Type More With Your Voice.",
-    subHome: "Open-source and offline-first voice transcription workflow with BYOD (Bring Your Own Key).",
-    featureOpenSource: "Open Source",
-    featureOfflineFirst: "Offline First",
-    featureByod: "BYOD",
-    statsDailyInputTitle: "Input Trend",
-    statsDailyInputDesc: "Auto-calculated from recording history and cached transcripts for the last 30 days.",
-    statsToday: "Today",
-    statsDailyAvg: "Daily Avg",
-    statsMonthTotal: "This Month",
-    statsYearTotal: "This Year",
-    statsTotal: "Total",
-    statsUnitChars: "chars",
-    statsVersion: "Version",
-    statsEmptyTitle: "No data yet",
-    statsEmptyDesc: "Run your first transcription and this page will automatically show real trends and usage statistics.",
-    statsEmptyInitModel: "Initialize model",
-    statsEmptyTryNow: "Try now",
-    statsEmptyGuideTitle: "First-run checklist",
-    statsEmptyGuideDesc: "1. Initialize model  2. Focus an input  3. Press Fn (or Fn+Shift) to start dictation",
-    statsEmptyTryHint: "Focus the input and press Fn (or Fn+Shift) to test.",
-    statsEmptyInputPlaceholder: "Test input area. Recognized text will paste to the focused control.",
-    updateAvailableTitle: "New version available",
-    updateAvailableDesc: "Current {current}, latest {latest}.",
-    updateAvailableHelp: "Update with Homebrew, or open the website for the latest install instructions.",
-    updateOpenRelease: "Open website",
-    updateDownloadDmg: "Download DMG",
-    updateCopyBrew: "Copy Homebrew command",
-    updateCopyBrewOk: "Copied: brew upgrade --cask typemore",
-    updateCopyBrewFailed: "Copy failed: {error}",
-    updateRemindLater: "Remind in 7 days",
-    updateCheckButton: "Check for updates",
-    updateChecking: "Checking...",
-    updateStatusIdle: "Click to check the latest version.",
-    updateStatusLatest: "You're already on the latest version.",
-    updateStatusAvailable: "A newer version is available. Upgrade with Homebrew or download the latest DMG.",
-    updateStatusError: "Update check failed: {error}",
-    updateCurrentVersion: "Current version",
-    updateLatestVersion: "Latest version",
-    updateVersionUnknown: "Not checked",
-    modelReady: "Model Ready",
-    modelInitializing: "Initializing",
-    modelNotReady: "Not Ready",
-    stopRecording: "Stop Recording",
-    startRecording: "Start Recording",
-    initModelRunning: "Initializing...",
-    initModelReady: "Model Ready",
-    initModelStart: "Initialize Model",
-    modelInitModalTitle: "Preparing local model",
-    modelInitModalDesc: "First-time download usually takes a few minutes and closes automatically when done.",
-    modelInitModalKeepTip: "Keep this page open. You can start recording immediately after completion.",
-    modelInitPhaseDownload: "Downloading model files",
-    modelInitPhaseExtract: "Extracting model files",
-    modelInitPhaseScan: "Validating model files",
-    modelInitPhaseDone: "Initialization complete",
-    statsEmptyQuickTestTitle: "Quick test input",
-    testInputTitle: "Test Input",
-    testInputDesc: "Focus the text area and press Fn (or Fn+Shift) to test end-to-end typing.",
-    testInputDictationBtn: "Test Dictation",
-    testInputTranslationBtn: "Test Translation",
-    testInputStopBtn: "Stop",
-    testInputModeHint: "“Test Translation” triggers the translation pipeline (Processing -> Optimizing -> Translating).",
-    viewHistory: "View History",
-    recentRecordings: "Recent Recordings",
-    noRecordings: "No recordings yet. Initialize the model and start recording.",
-    countItems: "{count} items",
-    historyTitle: "History",
-    historyRefresh: "Refresh",
-    historySelectAll: "Select all",
-    historyClearSelection: "Clear selection",
-    historyDeleteSelected: "Delete selected",
-    historySelectedCount: "{count} selected",
-    historyDeleteSelectedConfirm: "Delete {count} selected recordings? This cannot be undone.",
-    rename: "Rename",
-    delete: "Delete",
-    retranscribe: "Retranscribe",
-    copyResult: "Copy",
-    currentRecording: "Current recording: {time}",
-    noSelectedRecording: "No recording selected",
-    transcriptPlaceholder: "Transcription result will appear here...",
-    dictionaryTitle: "Dictionary",
-    dictionaryWords: "{count} words",
-    dictionaryPlaceholder: "Add a word, e.g. TypeMore",
-    dictionaryAdd: "Add word",
-    dictionaryOptimizeHint: "Dictionary terms are applied only when Processing is enabled and Optimizing runs.",
-    dictionaryEmpty: "No dictionary words yet. Add a few proper nouns first.",
-    dictionaryDelete: "Delete word",
-    settingsTitle: "Settings",
-    settingsSectionGeneral: "General",
-    settingsSectionLanguage: "Language",
-    settingsSectionHotkey: "Hotkeys",
-    settingsSectionCloud: "Processing",
-    settingsSectionProviders: "Model Providers",
-    settingsSectionTemp: "Temporary Directory",
-    settingsSectionAbout: "About",
-    settingsTempDirTitle: "Temporary Directory",
-    settingsTempDirDesc: "Open app temporary directory to inspect runtime temp files.",
-    settingsOpenTempDir: "Open Temporary Directory",
-    settingsProjectInfo: "Project Info",
-    settingsProjectWebsite: "Website",
-    settingsProjectGithub: "Open-source repo",
-    settingsProjectMoreApps: "More apps",
-    settingsProjectLicense: "License",
-    settingsInstallTitle: "Check for Updates",
-    settingsInstallDesc: "Check the latest public version from the Homebrew tap.",
-    settingsInstallCommand: "Install command",
-    settingsUpgradeCommand: "Upgrade command",
-    settingsCopyInstall: "Copy install command",
-    settingsCopyUpgrade: "Copy upgrade command",
-    settingsCopyInstallOk: "Copied install command",
-    settingsCopyUpgradeOk: "Copied upgrade command",
-    settingsCopyCommandFailed: "Copy command failed: {error}",
-    settingsLanguageTitle: "Language",
-    settingsLanguageDesc: "Auto follow system language, or switch manually.",
-    settingsHotkeyTitle: "Global Hotkey",
-    settingsHotkeyDesc: "Supports tap-toggle and long-press mode (press to start, release to stop).",
-    settingsHotkeyBuiltInHint: "Built-in shortcuts can stay empty (Fn / Fn+Shift only), or you can set dictation/translation shortcuts individually.",
-    settingsHotkeyDictation: "Dictation hotkey",
-    settingsHotkeyTranslation: "Translation hotkey",
-    settingsFnKeyToggle: "Enable built-in Fn shortcuts (macOS)",
-    settingsFnKeyDictationToggle: "Enable Fn (dictation)",
-    settingsFnKeyTranslationToggle: "Enable Fn+Shift (translation)",
-    settingsHotkeyTogglePlaceholder: "e.g. CommandOrControl+Alt+Space",
-    settingsHotkeySave: "Save hotkey",
-    settingsHotkeyReset: "Reset default",
-    settingsHotkeyRecord: "Record",
-    settingsHotkeyRecording: "Recording...",
-    settingsHotkeyPressHint: "Click Record then press combo. Press Esc to cancel.",
-    settingsTriggerMode: "Trigger mode",
-    settingsTriggerModeTap: "Tap to toggle",
-    settingsTriggerModeLongPress: "Long press, release to stop",
-    settingsOverlayPosition: "Overlay position",
-    settingsOverlayPositionTop: "Top",
-    settingsOverlayPositionBottom: "Bottom",
-    settingsOutputMode: "Output mode",
-    settingsOutputModeAutoPaste: "Auto-paste and restore previous clipboard",
-    settingsOutputModePasteAndKeep: "Auto-paste and keep result in clipboard",
-    settingsOutputModeCopyOnly: "Copy-only (no auto-paste)",
-    settingsHotkeyConflictTitle: "Hotkey conflicts",
-    settingsHotkeyConflictSame: "Dictation and translation hotkeys must be different.",
-    settingsHotkeyConflictWithSystem: "Conflicts with common system shortcut: {value}",
-    settingsHotkeyWarningSaveBlocked: "Resolve conflicts before saving.",
-    settingsTranslationTarget: "Translation target",
-    settingsTranslationTargetAuto: "Auto (ZH <-> EN)",
-    settingsTranslationTargetEn: "English",
-    settingsTranslationTargetZh: "Chinese",
-    settingsTranslationTargetJa: "Japanese",
-    settingsTranslationTargetKo: "Korean",
-    settingsCloudTitle: "Processing",
-    settingsCloudDesc: "Send local ASR output to cloud for optimization and translation. Configure models in “Model Providers” first.",
-    settingsCloudGuide: "Pipeline: Local ASR -> Cloud optimize -> (translation hotkey) Cloud translate. It falls back automatically on failures.",
-    settingsCloudEnabled: "Enable cloud post-processing",
-    settingsCloudOptimizeProvider: "Optimize model",
-    settingsCloudTranslateProvider: "Translate model",
-    settingsCloudTargetLanguage: "Cloud target language",
-    settingsCloudOptimizePrompt: "Optimize prompt",
-    settingsCloudTranslatePrompt: "Translate prompt",
-    settingsCloudOptimizeSection: "Optimize Stage",
-    settingsCloudTranslateSection: "Translate Stage",
-    settingsCloudOptimizeDesc: "Fix ASR punctuation, segmentation, and recognition errors.",
-    settingsCloudTranslateDesc: "Runs only for translation hotkey and outputs target-language text.",
-    settingsCloudTimeoutMs: "Timeout (ms)",
-    settingsCloudRetries: "Retry count",
-    settingsCloudProviders: "Providers",
-    settingsCloudProviderVendor: "Vendor",
-    settingsCloudProviderModel: "Model",
-    settingsCloudProviderApiKey: "API Key",
-    settingsCloudProviderApiKeyHint: "Create and paste your API key from the provider console",
-    settingsCloudProviderApiKeyDocs: "Get API key",
-    settingsCloudProviderNoApiKeyNeeded: "Ollama runs locally and does not require an API key",
-    settingsCloudProviderBaseUrl: "Base URL (optional)",
-    settingsCloudProviderEnabled: "Enabled",
-    settingsCloudAddProvider: "Add provider",
-    settingsCloudRemoveProvider: "Remove",
-    settingsCloudSave: "Save",
-    settingsCloudTest: "Test connection",
-    settingsCloudTesting: "Testing...",
-    settingsCloudTestOk: "Connection OK",
-    settingsCloudTestFailed: "Connection failed",
-    toastSaved: "Saved",
-    toastSaveFailed: "Save failed: {error}",
-    settingsCloudNoProviderHint: "No models configured yet. Go to “Model Providers” and add one first.",
-    settingsProvidersTitle: "Model Providers",
-    settingsProvidersDesc: "Each entry is one callable model (vendor + model). Optimize/Translate selects from this list.",
-    settingsProvidersGuide: "Start with one optimize model, then optionally add a dedicated translate model.",
-    settingsProvidersSave: "Save provider configs",
-    transcriptCloudProcessFailed: "Cloud processing failed, fallback to local text: {error}",
-    languageModeLabel: "Interface language",
-    langAuto: "Auto (System)",
-    langZh: "Chinese",
-    langEn: "English",
-    accessTitle: "Accessibility Permission",
-    accessNeed: "To type into any app, please grant macOS Accessibility permission.",
-    accessGranted: "Permission granted. You can type into other apps.",
-    accessRequest: "Request Permission",
-    accessOpenSettings: "Open System Settings",
-    accessRefresh: "Refresh",
-    recordingPrefix: "recording",
-    transcriptInitFailed: "Initialization failed: {error}",
-    transcriptListenFailed: "Failed to listen model progress: {error}",
-    transcriptModelReady: "Model is ready. You can start recording.",
-    transcriptModelInitFailed: "Model initialization failed: {error}",
-    transcriptInitInProgress: "Model is initializing. Please press the hotkey again in a moment.",
-    transcriptRecordingFailed: "Recording transcription failed: {error}",
-    transcriptNeedInit: "Please initialize the model before recording.",
-    transcriptNeedSelect: "Please select a recording from the left list.",
-    transcriptRetryFailed: "Transcription failed: {error}",
-    transcriptCopyFailed: "[Copy failed] {error}",
-    transcriptRenameFailed: "Rename failed: {error}",
-    transcriptDeleteFailed: "Delete failed: {error}",
-    transcriptOpenTempDirOk: "Opened temporary directory: {dir}",
-    transcriptOpenTempDirFailed: "Failed to open temporary directory: {error}",
-    transcriptTypeFailed: "Failed to type into focused app: {error}",
-    transcriptTranslating: "Translating...",
-    transcriptTranslationFailed: "Translation failed, fallback to original text: {error}",
-    fallbackTitle: "Auto typing failed",
-    fallbackDesc: "Copy the result and paste it to your target input manually.",
-    fallbackCopy: "Copy transcription",
-    fallbackClose: "Close",
-  },
-} as const;
-
-function formatI18n(template: string, vars?: Record<string, string | number>) {
-  if (!vars) {
-    return template;
-  }
-  return template.replace(/\{(\w+)\}/g, (_, key: string) => String(vars[key] ?? ""));
-}
 
 function parseVersion(version: string) {
   const core = version.trim().replace(/^v/i, "").split("-")[0];
@@ -706,11 +251,6 @@ function isVersionGreater(a: string, b: string) {
   return false;
 }
 
-function detectSystemLang(): UiLang {
-  const lang = (navigator.language || "en-US").toLowerCase();
-  return lang.startsWith("zh") ? "zh" : "en";
-}
-
 function detectDesktopPlatform(): DesktopPlatform {
   const platform = `${navigator.platform || ""} ${navigator.userAgent || ""}`.toLowerCase();
   if (platform.includes("mac")) {
@@ -720,17 +260,6 @@ function detectDesktopPlatform(): DesktopPlatform {
     return "windows";
   }
   return "other";
-}
-
-function resolveUiLangFromLocalSetting(): UiLang {
-  const raw = window.localStorage.getItem(LANG_MODE_STORAGE_KEY);
-  if (raw === "zh-CN") {
-    return "zh";
-  }
-  if (raw === "en-US") {
-    return "en";
-  }
-  return detectSystemLang();
 }
 
 function defaultCloudSettings(): CloudSettings {
@@ -810,102 +339,11 @@ function emptyUsageStats(): UsageStats {
   };
 }
 
-function OverlayWindowApp() {
-  const [phase, setPhase] = useState<OverlayStatePayload["phase"]>("hidden");
-  const [text, setText] = useState("");
-  const [uiLang, setUiLang] = useState<UiLang>(() => resolveUiLangFromLocalSetting());
-
-  useEffect(() => {
-    document.documentElement.classList.add("overlay-mode");
-    document.body.classList.add("overlay-mode");
-    document.getElementById("root")?.classList.add("overlay-mode");
-    let unlisten: (() => void) | undefined;
-    listen<OverlayStatePayload>("overlay-state", (event) => {
-      const nextUiLang = resolveUiLangFromLocalSetting();
-      setUiLang(nextUiLang);
-      setPhase(event.payload.phase);
-      setText((prev) => {
-        if (typeof event.payload.text === "string") {
-          return event.payload.text;
-        }
-        if (event.payload.phase === "hidden") {
-          return "";
-        }
-        return prev;
-      });
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-      document.documentElement.classList.remove("overlay-mode");
-      document.body.classList.remove("overlay-mode");
-      document.getElementById("root")?.classList.remove("overlay-mode");
-    };
-  }, []);
-
-  if (phase === "hidden") {
-    return <div className="h-screen w-screen bg-transparent" />;
-  }
-
-  const title =
-    phase === "listening"
-      ? uiLang === "zh"
-        ? "Listening"
-        : "Listening"
-      : phase === "thinking"
-        ? (text?.trim() || "Processing")
-      : "Ready";
-  const isListening = phase === "listening";
-  const isListeningTranslation =
-    isListening &&
-    (text?.includes("toggle-translation") ||
-      text?.toLowerCase().includes("translation") ||
-      text?.includes("翻译"));
-  const normalizedTitle = title.trim().toLowerCase();
-  const titleClass = isListening
-    ? isListeningTranslation
-      ? "text-orange-200"
-      : "text-emerald-200"
-    : phase === "ready"
-      ? "text-emerald-300"
-      : normalizedTitle.includes("optimiz") || normalizedTitle.includes("优化")
-        ? "text-amber-200"
-        : normalizedTitle.includes("process")
-          ? "text-sky-200"
-          : normalizedTitle.includes("translat")
-            ? "text-cyan-200"
-            : "text-white";
-  return (
-    <main className="h-screen w-screen bg-transparent p-0">
-      <div
-        className={cn(
-          "h-full w-full overflow-hidden rounded-[16px] border border-white/18 bg-black/88 px-3 text-white shadow-[0_10px_28px_rgba(0,0,0,0.45)] transition-opacity duration-300",
-          phase === "ready" ? "opacity-95" : "opacity-100"
-        )}
-      >
-        <div className="flex h-full items-center justify-center gap-3">
-          <div
-            className={cn(
-              "text-sm font-semibold tracking-tight leading-none transition-colors duration-100",
-              titleClass
-            )}
-          >
-            {title}
-          </div>
-        </div>
-      </div>
-    </main>
-  );
-}
-
 function MainApp() {
   const isMacPlatform = DEFAULT_DESKTOP_PLATFORM === "macos";
   const [page, setPage] = useState<Page>("home");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("language");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("hotkey");
   const [recordings, setRecordings] = useState<RecordingItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
@@ -915,23 +353,23 @@ function MainApp() {
   const [copied, setCopied] = useState(false);
   const [dictionaryWords, setDictionaryWords] = useState<string[]>([]);
   const [newWord, setNewWord] = useState("");
-  const [langMode, setLangMode] = useState<LangMode>(() => {
+  const [langMode] = useState<LangMode>(() => {
     const raw = window.localStorage.getItem(LANG_MODE_STORAGE_KEY);
     return raw === "zh-CN" || raw === "en-US" || raw === "auto" ? raw : "auto";
   });
   const [accessibility, setAccessibility] = useState<AccessibilityStatus>({ supported: false, trusted: false });
   const [hotkeyDictation, setHotkeyDictation] = useState(DEFAULT_HOTKEY_DICTATION);
-  const [hotkeyTranslation, setHotkeyTranslation] = useState(DEFAULT_HOTKEY_TRANSLATION);
-  const [fnDictationEnabled, setFnDictationEnabled] = useState(isMacPlatform);
-  const [fnTranslationEnabled, setFnTranslationEnabled] = useState(isMacPlatform);
-  const [triggerMode, setTriggerMode] = useState<HotkeyTriggerMode>(DEFAULT_TRIGGER_MODE);
+  const [doubleTapEnabled, setDoubleTapEnabled] = useState(true);
   const [overlayPosition, setOverlayPosition] = useState<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
   const [outputMode, setOutputMode] = useState<OutputMode>(DEFAULT_OUTPUT_MODE);
-  const [translationTargetLang, setTranslationTargetLang] = useState<TranslationTargetLang>("auto");
   const [cloudSettings, setCloudSettings] = useState<CloudSettings>(defaultCloudSettings);
   const [savingCloudSettings, setSavingCloudSettings] = useState(false);
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
   const [providerTestResults, setProviderTestResults] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const [asrSettings, setAsrSettings] = useState<AsrSettings>(DEFAULT_ASR_SETTINGS);
+  const [savingAsr, setSavingAsr] = useState(false);
+  const [testingAsr, setTestingAsr] = useState(false);
+  const [asrTestResult, setAsrTestResult] = useState<TestAsrResult | null>(null);
   const [savingHotkeys, setSavingHotkeys] = useState(false);
   const [toast, setToast] = useState<{ message: string; kind: "success" | "error" } | null>(null);
   const [captureTarget, setCaptureTarget] = useState<CaptureTarget>(null);
@@ -950,17 +388,7 @@ function MainApp() {
   const isRecordingRef = useRef(false);
   const modelReadyRef = useRef(false);
   const recordingByHotkeyRef = useRef(false);
-  const triggerModeRef = useRef<HotkeyTriggerMode>(DEFAULT_TRIGGER_MODE);
-  const activeHoldActionRef = useRef<HotkeyAction | null>(null);
   const activeHotkeyActionRef = useRef<HotkeyAction | null>(null);
-  const pendingStartActionRef = useRef<HotkeyAction | null>(null);
-  const cancelAfterStartActionRef = useRef<HotkeyAction | null>(null);
-  const lastPressedAtRef = useRef<Record<HotkeyAction, number>>({
-    "toggle-dictation": 0,
-    "toggle-translation": 0,
-  });
-  const suppressDictationUntilRef = useRef(0);
-  const suppressTranslationUntilRef = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const levelBufferRef = useRef<Uint8Array | null>(null);
@@ -987,10 +415,6 @@ function MainApp() {
   useEffect(() => {
     modelReadyRef.current = modelReady;
   }, [modelReady]);
-
-  useEffect(() => {
-    triggerModeRef.current = triggerMode;
-  }, [triggerMode]);
 
   const uiLang: UiLang = useMemo(() => {
     if (langMode === "zh-CN") {
@@ -1023,28 +447,8 @@ function MainApp() {
       ? "点击输入框后按已配置的听写快捷键开始测试。"
       : "Focus the input and press your configured dictation shortcut to test.";
   }, [isMacPlatform, t, uiLang]);
-  const builtInHotkeyHint = useMemo(() => {
-    if (isMacPlatform) {
-      return t("settingsHotkeyBuiltInHint");
-    }
-    return uiLang === "zh"
-      ? "Windows 上默认使用 F8（听写）和 F9（翻译）；也可按需修改。内置 Fn / Fn+Shift 仅在 macOS 可用。"
-      : "Windows defaults to F8 for dictation and F9 for translation. You can change them as needed. Built-in Fn / Fn+Shift shortcuts are only available on macOS.";
-  }, [isMacPlatform, t, uiLang]);
-  const fnHotkeyTitle = useMemo(() => {
-    if (isMacPlatform) {
-      return t("settingsFnKeyToggle");
-    }
-    return uiLang === "zh" ? "内置 Fn 快捷键（仅 macOS）" : "Built-in Fn shortcuts (macOS only)";
-  }, [isMacPlatform, t, uiLang]);
-  const fnHotkeyUnavailableHint = useMemo(() => {
-    if (isMacPlatform) {
-      return null;
-    }
-    return uiLang === "zh"
-      ? "当前运行在 Windows，上面的 Fn 开关不会生效。请使用全局快捷键。"
-      : "You are running on Windows. The Fn toggles above do not apply here; use global shortcuts instead.";
-  }, [isMacPlatform, uiLang]);
+  const builtInHotkeyHint = useMemo(() => t("settingsHotkeyBuiltInHint"), [t]);
+  const fnHotkeyTitle = useMemo(() => t("settingsFnKeyToggle"), [t]);
   const initProgressPercent = Math.max(0, Math.min(100, Math.round(Number(initStatus.progress || 0))));
   const initPhaseLabel = useMemo(() => {
     if (initStatus.phase === "download") {
@@ -1137,18 +541,7 @@ function MainApp() {
     () => findSystemHotkeyConflict(hotkeyDictation),
     [hotkeyDictation]
   );
-  const translationSystemConflict = useMemo(
-    () => findSystemHotkeyConflict(hotkeyTranslation),
-    [hotkeyTranslation]
-  );
-  const hasDuplicateHotkeys = useMemo(
-    () =>
-      Boolean(hotkeyDictation.trim()) &&
-      Boolean(hotkeyTranslation.trim()) &&
-      canonicalHotkey(hotkeyDictation) === canonicalHotkey(hotkeyTranslation),
-    [hotkeyDictation, hotkeyTranslation]
-  );
-  const hasHotkeyConflicts = Boolean(dictationSystemConflict || translationSystemConflict || hasDuplicateHotkeys);
+  const hasHotkeyConflicts = Boolean(dictationSystemConflict);
 
   async function setOverlayState(
     phase: "listening" | "thinking" | "ready",
@@ -1330,13 +723,9 @@ function MainApp() {
   async function loadGlobalShortcuts() {
     const settings = await invoke<HotkeySettings>("get_global_shortcuts");
     setHotkeyDictation(settings.dictation);
-    setHotkeyTranslation(settings.translation);
-    setFnDictationEnabled(settings.fnDictationEnabled);
-    setFnTranslationEnabled(settings.fnTranslationEnabled);
-    setTriggerMode(settings.triggerMode);
+    setDoubleTapEnabled(settings.doubleTapEnabled);
     setOverlayPosition(settings.overlayPosition);
     setOutputMode(settings.outputMode);
-    setTranslationTargetLang(settings.translationTarget);
   }
 
   async function loadCloudSettings() {
@@ -1345,6 +734,41 @@ function MainApp() {
       setCloudSettings(settings);
     } catch {
       setCloudSettings(defaultCloudSettings());
+    }
+  }
+
+  async function loadAsrSettings() {
+    try {
+      const settings = await invoke<AsrSettings>("get_asr_settings");
+      setAsrSettings(settings);
+    } catch {
+      setAsrSettings(DEFAULT_ASR_SETTINGS);
+    }
+  }
+
+  async function onSaveAsrSettings() {
+    setSavingAsr(true);
+    try {
+      const next = await invoke<AsrSettings>("set_asr_settings", { settings: asrSettings });
+      setAsrSettings(next);
+      setAsrTestResult(null);
+    } catch (err) {
+      setAsrTestResult({ ok: false, message: String(err) });
+    } finally {
+      setSavingAsr(false);
+    }
+  }
+
+  async function onTestAsrSettings() {
+    setTestingAsr(true);
+    setAsrTestResult(null);
+    try {
+      const result = await invoke<TestAsrResult>("test_asr_provider", { settings: asrSettings });
+      setAsrTestResult(result);
+    } catch (err) {
+      setAsrTestResult({ ok: false, message: String(err) });
+    } finally {
+      setTestingAsr(false);
     }
   }
 
@@ -1505,7 +929,7 @@ function MainApp() {
   }, [historyMenuId]);
 
   useEffect(() => {
-    Promise.all([loadRecordings(), loadInitStatus(), loadGlobalShortcuts(), loadCloudSettings(), loadDictionaryWords()]).catch((err) => {
+    Promise.all([loadRecordings(), loadInitStatus(), loadGlobalShortcuts(), loadCloudSettings(), loadDictionaryWords(), loadAsrSettings()]).catch((err) => {
       setTranscript(t("transcriptInitFailed", { error: String(err) }));
     });
 
@@ -1614,8 +1038,6 @@ function MainApp() {
       }
       if (captureTarget === "dictation") {
         setHotkeyDictation(shortcut);
-      } else if (captureTarget === "translation") {
-        setHotkeyTranslation(shortcut);
       }
       setCaptureTarget(null);
     };
@@ -1645,31 +1067,23 @@ function MainApp() {
     }
   }
 
-  function inferTranslationTarget(text: string): Exclude<TranslationTargetLang, "auto"> {
-    const hasCjk = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/.test(text);
-    return hasCjk ? "en" : "zh-CN";
-  }
-
-  async function runHotkeyPostProcess(text: string, action: HotkeyAction | null) {
+  async function runHotkeyPostProcess(text: string) {
     const source = text.trim();
     if (!source) {
       return source;
     }
-    const isTranslate = action === "toggle-translation";
-    const targetLang = isTranslate
-      ? translationTargetLang === "auto"
-        ? inferTranslationTarget(source)
-        : translationTargetLang
-      : undefined;
+    const pipe = cloudSettings.pipeline;
+    if (!pipe.enabled) {
+      return source;
+    }
+    const wantTranslate = Boolean(pipe.translateProviderId?.trim());
     try {
-      if (isTranslate) {
+      if (wantTranslate) {
         setTranscript(t("transcriptTranslating"));
         await setOverlayState("thinking", t("transcriptTranslating"));
       }
       const result = await invoke<CloudProcessResult>("process_text_with_cloud", {
         text: source,
-        translate: isTranslate,
-        targetLang,
       });
       return (result.finalText || source).trim();
     } catch (err) {
@@ -1704,7 +1118,7 @@ function MainApp() {
         };
 
         const result = await invoke<SaveAndTranscribeResult>("save_recording_and_transcribe", { payload });
-        const postProcessed = await runHotkeyPostProcess(result.text || "", activeHotkeyActionRef.current);
+        const postProcessed = await runHotkeyPostProcess(result.text || "");
         setRecordings((prev) => [result.recording, ...prev]);
         setSelectedId(result.recording.id);
         setTranscript(postProcessed || "");
@@ -1728,10 +1142,7 @@ function MainApp() {
         }
       } finally {
         recordingByHotkeyRef.current = false;
-        activeHoldActionRef.current = null;
         activeHotkeyActionRef.current = null;
-        pendingStartActionRef.current = null;
-        cancelAfterStartActionRef.current = null;
         setIsBusy(false);
       }
     };
@@ -1787,33 +1198,18 @@ function MainApp() {
     if (isBusy || isRecordingRef.current) {
       return;
     }
-    pendingStartActionRef.current = action;
     const ready = await ensureModelReadyForHotkey();
     if (!ready) {
-      pendingStartActionRef.current = null;
       return;
     }
     try {
       recordingByHotkeyRef.current = true;
-      activeHoldActionRef.current = action;
       activeHotkeyActionRef.current = action;
       await startRecording();
       await setOverlayState("listening");
-      if (
-        triggerModeRef.current === "long-press" &&
-        cancelAfterStartActionRef.current === action
-      ) {
-        cancelAfterStartActionRef.current = null;
-        await stopRecordingFromHotkey();
-        activeHoldActionRef.current = null;
-      }
     } catch (err) {
       setTranscript(t("transcriptRecordingFailed", { error: String(err) }));
       await setOverlayState("ready", t("transcriptRecordingFailed", { error: String(err) }));
-    } finally {
-      if (pendingStartActionRef.current === action) {
-        pendingStartActionRef.current = null;
-      }
     }
   }
 
@@ -1825,61 +1221,16 @@ function MainApp() {
     stopRecording();
   }
 
+  /// Fallback handler for the optional global-shortcut path (when user sets a system shortcut
+  /// alongside double-tap). The double-tap path is handled by the native pipeline in Rust.
   async function onHotkeyEvent(payload: GlobalShortcutPayload) {
-    const now = Date.now();
-    if (payload.action === "toggle-translation") {
-      suppressDictationUntilRef.current = now + 260;
-    }
-    if (payload.action === "toggle-dictation" && now < suppressDictationUntilRef.current) {
+    if (payload.state !== "pressed") {
       return;
     }
-    if (payload.action === "toggle-dictation") {
-      suppressTranslationUntilRef.current = now + 130;
-    } else if (now < suppressTranslationUntilRef.current) {
-      return;
-    }
-
-    if (triggerModeRef.current === "tap") {
-      if (payload.state !== "pressed") {
-        return;
-      }
-      const lastPressed = lastPressedAtRef.current[payload.action];
-      if (now - lastPressed < 260) {
-        return;
-      }
-      lastPressedAtRef.current[payload.action] = now;
-      if (isRecordingRef.current) {
-        await stopRecordingFromHotkey();
-      } else {
-        await startRecordingFromHotkey(payload.action);
-      }
-      return;
-    }
-
-    if (payload.state === "pressed") {
-      if (isRecordingRef.current) {
-        return;
-      }
-      await startRecordingFromHotkey(payload.action);
-      return;
-    }
-
-    if (
-      payload.state === "released" &&
-      recordingByHotkeyRef.current &&
-      activeHoldActionRef.current === payload.action
-    ) {
+    if (isRecordingRef.current) {
       await stopRecordingFromHotkey();
-      activeHoldActionRef.current = null;
-      return;
-    }
-
-    if (
-      payload.state === "released" &&
-      triggerModeRef.current === "long-press" &&
-      pendingStartActionRef.current === payload.action
-    ) {
-      cancelAfterStartActionRef.current = payload.action;
+    } else {
+      await startRecordingFromHotkey(payload.action);
     }
   }
 
@@ -2025,32 +1376,21 @@ function MainApp() {
   }
 
   async function onSaveHotkeys() {
-    const dictation = hotkeyDictation.trim();
-    const translation = hotkeyTranslation.trim();
     if (hasHotkeyConflicts) {
-      if (hasHotkeyConflicts) {
-        setTranscript(t("settingsHotkeyWarningSaveBlocked"));
-      }
+      setTranscript(t("settingsHotkeyWarningSaveBlocked"));
       return;
     }
     setSavingHotkeys(true);
     try {
       const next = await invoke<HotkeySettings>("set_global_shortcuts", {
-        dictation,
-        translation,
-        triggerMode,
+        dictation: hotkeyDictation.trim(),
         overlayPosition,
         outputMode,
-        translationTarget: translationTargetLang,
       });
       setHotkeyDictation(next.dictation);
-      setHotkeyTranslation(next.translation);
-      setFnDictationEnabled(next.fnDictationEnabled);
-      setFnTranslationEnabled(next.fnTranslationEnabled);
-      setTriggerMode(next.triggerMode);
+      setDoubleTapEnabled(next.doubleTapEnabled);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
-      setTranslationTargetLang(next.translationTarget);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -2060,28 +1400,19 @@ function MainApp() {
 
   async function onResetHotkeys() {
     setHotkeyDictation(DEFAULT_HOTKEY_DICTATION);
-    setHotkeyTranslation(DEFAULT_HOTKEY_TRANSLATION);
-    setTriggerMode(DEFAULT_TRIGGER_MODE);
     setOverlayPosition(DEFAULT_OVERLAY_POSITION);
     setOutputMode(DEFAULT_OUTPUT_MODE);
     setSavingHotkeys(true);
     try {
       const next = await invoke<HotkeySettings>("set_global_shortcuts", {
         dictation: DEFAULT_HOTKEY_DICTATION,
-        translation: DEFAULT_HOTKEY_TRANSLATION,
-        triggerMode: DEFAULT_TRIGGER_MODE,
         overlayPosition: DEFAULT_OVERLAY_POSITION,
         outputMode: DEFAULT_OUTPUT_MODE,
-        translationTarget: "auto",
       });
       setHotkeyDictation(next.dictation);
-      setHotkeyTranslation(next.translation);
-      setFnDictationEnabled(next.fnDictationEnabled);
-      setFnTranslationEnabled(next.fnTranslationEnabled);
-      setTriggerMode(next.triggerMode);
+      setDoubleTapEnabled(next.doubleTapEnabled);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
-      setTranslationTargetLang(next.translationTarget);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -2089,21 +1420,14 @@ function MainApp() {
     }
   }
 
-  async function onToggleFnKeyModes(nextDictationEnabled: boolean, nextTranslationEnabled: boolean) {
+  async function onToggleDoubleTap(nextEnabled: boolean) {
     setSavingHotkeys(true);
     try {
-      const next = await invoke<HotkeySettings>("set_fn_key_modes", {
-        dictationEnabled: nextDictationEnabled,
-        translationEnabled: nextTranslationEnabled,
-      });
+      const next = await invoke<HotkeySettings>("set_double_tap_enabled", { enabled: nextEnabled });
       setHotkeyDictation(next.dictation);
-      setHotkeyTranslation(next.translation);
-      setFnDictationEnabled(next.fnDictationEnabled);
-      setFnTranslationEnabled(next.fnTranslationEnabled);
-      setTriggerMode(next.triggerMode);
+      setDoubleTapEnabled(next.doubleTapEnabled);
       setOverlayPosition(next.overlayPosition);
       setOutputMode(next.outputMode);
-      setTranslationTargetLang(next.translationTarget);
     } catch (err) {
       setTranscript(String(err));
     } finally {
@@ -2215,10 +1539,6 @@ function MainApp() {
     }
   }
 
-  async function onSaveProvidersOnly() {
-    await onSaveCloudSettings();
-  }
-
   async function onTestCloudProvider(providerId: string) {
     setTestingProviderId(providerId);
     try {
@@ -2267,25 +1587,7 @@ function MainApp() {
   const navItems: Array<{ key: Page; label: string; icon: typeof Home }> = [
     { key: "home", label: t("navHome"), icon: Home },
     { key: "history", label: t("navHistory"), icon: History },
-    { key: "dictionary", label: t("navDictionary"), icon: BookText },
-    { key: "optimization", label: t("navOptimization"), icon: Sparkles },
-    { key: "translation", label: t("navTranslation"), icon: Languages },
   ];
-  const processingIntro = (
-    <>
-      <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
-      <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
-      <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
-        <input
-          type="checkbox"
-          checked={cloudSettings.pipeline.enabled}
-          onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
-          className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-        />
-        <span>{t("settingsCloudEnabled")}</span>
-      </label>
-    </>
-  );
   const dailyInputChartData = useMemo(
     () => ({
       labels: usageStats.dailyPoints.map((item) => item.dateLabel),
@@ -2355,9 +1657,9 @@ function MainApp() {
     [t]
   );
   const settingsSections: Array<{ key: SettingsSection; label: string }> = [
-    { key: "language", label: t("settingsSectionLanguage") },
     { key: "hotkey", label: t("settingsSectionHotkey") },
-    { key: "providers", label: t("settingsSectionProviders") },
+    { key: "model", label: t("settingsSectionModel") },
+    { key: "pipeline", label: t("settingsSectionPipeline") },
     { key: "temp", label: t("settingsSectionTemp") },
     { key: "about", label: t("settingsSectionAbout") },
   ];
@@ -2406,7 +1708,7 @@ function MainApp() {
               type="button"
               className="tm-nav-btn flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100 focus-visible:ring-0"
               onClick={() => {
-                setSettingsSection("language");
+                setSettingsSection("hotkey");
                 setSettingsOpen(true);
               }}
             >
@@ -2742,202 +2044,6 @@ function MainApp() {
             </div>
           )}
 
-          {page === "optimization" && (
-            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_1fr]">
-              <header className="flex items-center justify-between">
-                <h2 className="text-3xl font-semibold tracking-tight">{t("navOptimization")}</h2>
-              </header>
-
-              <Card className="p-4">
-                {processingIntro}
-                <div className="mt-3 space-y-3">
-                  {cloudSettings.providers.length === 0 && (
-                    <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                      <div>{t("settingsCloudNoProviderHint")}</div>
-                      <button
-                        type="button"
-                        className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 font-medium text-amber-900"
-                        onClick={() => {
-                          setSettingsSection("providers");
-                          setSettingsOpen(true);
-                        }}
-                      >
-                        {t("settingsSectionProviders")}
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
-                    <div className="text-sm font-semibold text-slate-900">{t("settingsCloudOptimizeSection")}</div>
-                    <p className="mt-1 text-xs text-slate-500">{t("settingsCloudOptimizeDesc")}</p>
-                    <div className="mt-3">
-                      <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizeProvider")}</label>
-                      <select
-                        value={cloudSettings.pipeline.optimizeProviderId}
-                        onChange={(event) => updateCloudPipeline("optimizeProviderId", event.target.value)}
-                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                      >
-                        <option value="">-</option>
-                        {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {buildProviderLabel(provider)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="mt-3">
-                      <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizePrompt")}</label>
-                      <textarea
-                        value={cloudSettings.pipeline.optimizePrompt}
-                        onChange={(event) => updateCloudPipeline("optimizePrompt", event.target.value)}
-                        className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={onSaveCloudSettings} disabled={savingCloudSettings}>
-                      {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
-                      {t("settingsCloudSave")}
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {page === "translation" && (
-            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_1fr]">
-              <header className="flex items-center justify-between">
-                <h2 className="text-3xl font-semibold tracking-tight">{t("navTranslation")}</h2>
-              </header>
-
-              <Card className="p-4">
-                {processingIntro}
-                <div className="mt-3 space-y-3">
-                  <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
-                    <div className="text-sm font-semibold text-slate-900">{t("settingsCloudTranslateSection")}</div>
-                    <p className="mt-1 text-xs text-slate-500">{t("settingsCloudTranslateDesc")}</p>
-                    <div>
-                      <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslateProvider")}</label>
-                      <select
-                        value={cloudSettings.pipeline.translateProviderId}
-                        onChange={(event) => updateCloudPipeline("translateProviderId", event.target.value)}
-                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                      >
-                        <option value="">-</option>
-                        {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
-                          <option key={provider.id} value={provider.id}>
-                            {buildProviderLabel(provider)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-3">
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTargetLanguage")}</label>
-                        <select
-                          value={cloudSettings.pipeline.targetLanguage || "en"}
-                          onChange={(event) => updateCloudPipeline("targetLanguage", event.target.value)}
-                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                        >
-                          {TARGET_LANGUAGE_OPTIONS.map((item) => (
-                            <option key={item.value} value={item.value}>
-                              {uiLang === "zh" ? item.labelZh : item.labelEn}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTimeoutMs")}</label>
-                        <input
-                          type="number"
-                          value={cloudSettings.pipeline.timeoutMs}
-                          onChange={(event) => updateCloudPipeline("timeoutMs", Number(event.target.value) || 10000)}
-                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudRetries")}</label>
-                        <input
-                          type="number"
-                          value={cloudSettings.pipeline.maxRetries}
-                          onChange={(event) => updateCloudPipeline("maxRetries", Number(event.target.value) || 0)}
-                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslatePrompt")}</label>
-                      <textarea
-                        value={cloudSettings.pipeline.translatePrompt}
-                        onChange={(event) => updateCloudPipeline("translatePrompt", event.target.value)}
-                        className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <Button variant="outline" onClick={onSaveCloudSettings} disabled={savingCloudSettings}>
-                      {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
-                      {t("settingsCloudSave")}
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          )}
-
-          {page === "dictionary" && (
-            <div className="grid h-full min-h-0 gap-4 md:grid-rows-[auto_auto_1fr]">
-              <header className="flex items-center justify-between">
-                <h2 className="text-3xl font-semibold tracking-tight">{t("dictionaryTitle")}</h2>
-                <Badge className="bg-slate-100 text-slate-700 border-slate-200">{t("dictionaryWords", { count: dictionaryWords.length })}</Badge>
-              </header>
-
-              <Card className="p-3">
-                <div className="flex flex-wrap gap-2">
-                  <input
-                    value={newWord}
-                    onChange={(event) => setNewWord(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") addDictionaryWord();
-                    }}
-                    placeholder={t("dictionaryPlaceholder")}
-                    className="h-10 min-w-[220px] flex-1 rounded-md border border-slate-300 px-3 text-sm outline-none ring-sky-300 transition focus:ring"
-                  />
-                  <Button onClick={addDictionaryWord}>
-                    <Plus size={15} />
-                    {t("dictionaryAdd")}
-                  </Button>
-                </div>
-                <p className="mt-2 text-xs text-slate-500">{t("dictionaryOptimizeHint")}</p>
-              </Card>
-
-              <Card className="min-h-0 overflow-hidden">
-                <ScrollArea className="h-full" viewportClassName="h-full p-3">
-                  <div className="flex flex-wrap gap-2">
-                    {dictionaryWords.map((word) => (
-                      <div key={word} className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-sm">
-                        <span>{word}</span>
-                        <button
-                          type="button"
-                          className="rounded p-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                          onClick={() => removeDictionaryWord(word)}
-                          title={t("dictionaryDelete")}
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ))}
-                    {dictionaryWords.length === 0 && (
-                      <div className="w-full rounded-xl border border-dashed border-slate-300 px-3 py-10 text-center text-sm text-slate-500">{t("dictionaryEmpty")}</div>
-                    )}
-                  </div>
-                </ScrollArea>
-              </Card>
-            </div>
-          )}
         </section>
       </div>
 
@@ -2975,31 +2081,30 @@ function MainApp() {
 
               <div className="min-h-0 flex-1 overflow-y-auto p-6">
                 <div className="space-y-4 pb-2">
-                  {settingsSection === "language" && (
-                  <Card className="tm-settings-card p-4">
-                    <p className="text-sm text-slate-600">{t("settingsLanguageDesc")}</p>
-                    <p className="mt-2 text-xs text-slate-500">UI language updates immediately and also syncs to backend prompt/status messages.</p>
-                    <div className="mt-4 max-w-xs">
-                      <label className="mb-1 block text-sm text-slate-700">{t("languageModeLabel")}</label>
-                      <select
-                        value={langMode}
-                        onChange={(event) => setLangMode(event.target.value as LangMode)}
-                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                      >
-                        <option value="auto">{t("langAuto")}</option>
-                        <option value="zh-CN">{t("langZh")}</option>
-                        <option value="en-US">{t("langEn")}</option>
-                      </select>
-                    </div>
-                  </Card>
-                  )}
-
                   {settingsSection === "hotkey" && (
                   <Card className="tm-settings-card p-4">
                     <p className="text-sm text-slate-600">{t("settingsHotkeyDesc")}</p>
                     <p className="mt-2 text-xs text-slate-500">{builtInHotkeyHint}</p>
-                    <p className="mt-2 text-xs text-slate-500">Recommended: keep dictation and translation shortcuts distinct to avoid accidental mode switching.</p>
                     <div className="mt-3 space-y-3">
+                      <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2">
+                        <div className="text-xs font-medium text-slate-600">{fnHotkeyTitle}</div>
+                        <div className="mt-2 space-y-2">
+                          <label className="flex items-center gap-2 text-sm text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={doubleTapEnabled}
+                              disabled={savingHotkeys}
+                              onChange={(event) => {
+                                const next = event.target.checked;
+                                setDoubleTapEnabled(next);
+                                void onToggleDoubleTap(next);
+                              }}
+                              className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                            />
+                            <span>{t("settingsFnKeyDictationToggle")}</span>
+                          </label>
+                        </div>
+                      </div>
                       <div>
                         <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyDictation")}</label>
                         <div className="flex gap-2">
@@ -3019,37 +2124,6 @@ function MainApp() {
                             {captureTarget === "dictation" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
                           </Button>
                         </div>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsHotkeyTranslation")}</label>
-                        <div className="flex gap-2">
-                          <input
-                            value={normalizeHotkeyLabel(hotkeyTranslation)}
-                            readOnly
-                            placeholder={t("settingsHotkeyTogglePlaceholder")}
-                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none"
-                          />
-                          <Button
-                            variant="outline"
-                            type="button"
-                            className="h-10 min-w-[96px] justify-center whitespace-nowrap"
-                            onClick={() => setCaptureTarget("translation")}
-                            disabled={savingHotkeys}
-                          >
-                            {captureTarget === "translation" ? t("settingsHotkeyRecording") : t("settingsHotkeyRecord")}
-                          </Button>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsTriggerMode")}</label>
-                        <select
-                          value={triggerMode}
-                          onChange={(event) => setTriggerMode(event.target.value as HotkeyTriggerMode)}
-                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                        >
-                          <option value="tap">{t("settingsTriggerModeTap")}</option>
-                          <option value="long-press">{t("settingsTriggerModeLongPress")}</option>
-                        </select>
                       </div>
                       <div>
                         <label className="mb-1 block text-sm text-slate-700">{t("settingsOverlayPosition")}</label>
@@ -3074,71 +2148,15 @@ function MainApp() {
                           <option value="copy-only">{t("settingsOutputModeCopyOnly")}</option>
                         </select>
                       </div>
-                      <div>
-                        <label className="mb-1 block text-sm text-slate-700">{t("settingsTranslationTarget")}</label>
-                        <select
-                          value={translationTargetLang}
-                          onChange={(event) => setTranslationTargetLang(event.target.value as TranslationTargetLang)}
-                          className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                        >
-                          <option value="auto">{t("settingsTranslationTargetAuto")}</option>
-                          <option value="en">{t("settingsTranslationTargetEn")}</option>
-                          <option value="zh-CN">{t("settingsTranslationTargetZh")}</option>
-                          <option value="ja">{t("settingsTranslationTargetJa")}</option>
-                          <option value="ko">{t("settingsTranslationTargetKo")}</option>
-                        </select>
-                      </div>
-                      {hasHotkeyConflicts && (
+                      {dictationSystemConflict && (
                         <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                           <div className="font-semibold">{t("settingsHotkeyConflictTitle")}</div>
-                          {hasDuplicateHotkeys && <div>{t("settingsHotkeyConflictSame")}</div>}
-                          {dictationSystemConflict && (
-                            <div>{t("settingsHotkeyConflictWithSystem", { value: normalizeHotkeyLabel(dictationSystemConflict) })}</div>
-                          )}
-                          {translationSystemConflict && (
-                            <div>{t("settingsHotkeyConflictWithSystem", { value: normalizeHotkeyLabel(translationSystemConflict) })}</div>
-                          )}
+                          <div>{t("settingsHotkeyConflictWithSystem", { value: normalizeHotkeyLabel(dictationSystemConflict) })}</div>
                         </div>
                       )}
-                      <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2">
-                        <div className="text-xs font-medium text-slate-600">{fnHotkeyTitle}</div>
-                        <div className="mt-2 space-y-2">
-                          <label className="flex items-center gap-2 text-sm text-slate-700">
-                            <input
-                              type="checkbox"
-                              checked={fnDictationEnabled}
-                              disabled={savingHotkeys || !isMacPlatform}
-                              onChange={(event) => {
-                                const nextDictationEnabled = event.target.checked;
-                                setFnDictationEnabled(nextDictationEnabled);
-                                void onToggleFnKeyModes(nextDictationEnabled, fnTranslationEnabled);
-                              }}
-                              className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                            />
-                            <span>{t("settingsFnKeyDictationToggle")}</span>
-                          </label>
-                          <label className="flex items-center gap-2 text-sm text-slate-700">
-                            <input
-                              type="checkbox"
-                              checked={fnTranslationEnabled}
-                              disabled={savingHotkeys || !isMacPlatform}
-                              onChange={(event) => {
-                                const nextTranslationEnabled = event.target.checked;
-                                setFnTranslationEnabled(nextTranslationEnabled);
-                                void onToggleFnKeyModes(fnDictationEnabled, nextTranslationEnabled);
-                              }}
-                              className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                            />
-                            <span>{t("settingsFnKeyTranslationToggle")}</span>
-                          </label>
-                        </div>
-                        {fnHotkeyUnavailableHint && (
-                          <p className="mt-2 text-xs text-slate-500">{fnHotkeyUnavailableHint}</p>
-                        )}
-                      </div>
                       <p className="text-xs text-slate-500">{t("settingsHotkeyPressHint")}</p>
                       <div className="flex gap-2">
-                        <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys || hasHotkeyConflicts}>
+                        <Button variant="outline" onClick={onSaveHotkeys} disabled={savingHotkeys || Boolean(dictationSystemConflict)}>
                           {savingHotkeys ? <Loader2 size={14} className="animate-spin" /> : null}
                           {t("settingsHotkeySave")}
                         </Button>
@@ -3148,247 +2166,378 @@ function MainApp() {
                   </Card>
                   )}
 
-                  {settingsSection === "processing" && (
-                  <Card className="tm-settings-card p-4">
-                    <p className="text-sm text-slate-600">{t("settingsCloudDesc")}</p>
-                    <p className="mt-2 text-xs text-slate-500">{t("settingsCloudGuide")}</p>
-                    <div className="mt-3 space-y-3">
-                      <label className="flex items-center gap-2 text-sm text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={cloudSettings.pipeline.enabled}
-                          onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
-                          className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                        />
-                        <span>{t("settingsCloudEnabled")}</span>
-                      </label>
+                  {settingsSection === "model" && (
+                  <Card className="tm-settings-card p-4 space-y-4">
+                    <div>
+                      <p className="text-sm text-slate-600">{t("asrDesc")}</p>
+                    </div>
 
-                      {cloudSettings.providers.length === 0 && (
-                        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                          <div>{t("settingsCloudNoProviderHint")}</div>
-                          <button
-                            type="button"
-                            className="mt-2 rounded border border-amber-300 bg-white px-2 py-1 font-medium text-amber-900"
-                            onClick={() => setSettingsSection("providers")}
-                          >
-                            {t("settingsSectionProviders")}
-                          </button>
-                        </div>
-                      )}
+                    <div>
+                      <label className="mb-1 block text-sm text-slate-700">{t("asrProviderLabel")}</label>
+                      <select
+                        value={asrSettings.provider}
+                        onChange={(event) => {
+                          const next = event.target.value as AsrProviderKind;
+                          setAsrSettings((prev) => {
+                            const draft: AsrSettings = { ...prev, provider: next };
+                            if (next === "openai-whisper") draft.model = draft.model || "whisper-1";
+                            else if (next === "groq-whisper") draft.model = draft.model || "whisper-large-v3-turbo";
+                            return draft;
+                          });
+                          setAsrTestResult(null);
+                        }}
+                        className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                      >
+                        <option value="local-sherpa">{t("asrProviderLocalSherpa")}</option>
+                        <option value="openai-whisper">{t("asrProviderOpenaiWhisper")}</option>
+                        <option value="groq-whisper">{t("asrProviderGroqWhisper")}</option>
+                        <option value="openai-compatible">{t("asrProviderOpenaiCompatible")}</option>
+                      </select>
+                    </div>
 
-                      <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
-                        <div className="text-sm font-semibold text-slate-900">{t("settingsCloudOptimizeSection")}</div>
-                        <p className="mt-1 text-xs text-slate-500">{t("settingsCloudOptimizeDesc")}</p>
-                        <div className="mt-3">
-                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizeProvider")}</label>
-                          <select
-                            value={cloudSettings.pipeline.optimizeProviderId}
-                            onChange={(event) => updateCloudPipeline("optimizeProviderId", event.target.value)}
+                    {asrSettings.provider !== "local-sherpa" && (
+                      <>
+                        <div>
+                          <label className="mb-1 block text-sm text-slate-700">{t("asrModelLabel")}</label>
+                          <input
+                            value={asrSettings.model}
+                            onChange={(event) => {
+                              setAsrSettings((prev) => ({ ...prev, model: event.target.value }));
+                              setAsrTestResult(null);
+                            }}
+                            placeholder={asrSettings.provider === "groq-whisper" ? "whisper-large-v3-turbo" : "whisper-1"}
                             className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                          >
-                            <option value="">-</option>
-                            {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
-                              <option key={provider.id} value={provider.id}>
-                                {buildProviderLabel(provider)}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="mt-3">
-                          <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudOptimizePrompt")}</label>
-                          <textarea
-                            value={cloudSettings.pipeline.optimizePrompt}
-                            onChange={(event) => updateCloudPipeline("optimizePrompt", event.target.value)}
-                            className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
                           />
                         </div>
-                      </div>
-
-                      <div className="rounded-xl border border-slate-200 bg-white/70 p-3">
-                        <div className="text-sm font-semibold text-slate-900">{t("settingsCloudTranslateSection")}</div>
-                        <p className="mt-1 text-xs text-slate-500">{t("settingsCloudTranslateDesc")}</p>
                         <div>
-                          <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslateProvider")}</label>
-                          <select
-                            value={cloudSettings.pipeline.translateProviderId}
-                            onChange={(event) => updateCloudPipeline("translateProviderId", event.target.value)}
+                          <label className="mb-1 block text-sm text-slate-700">{t("asrApiKeyLabel")}</label>
+                          <input
+                            type="password"
+                            value={asrSettings.apiKey}
+                            onChange={(event) => {
+                              setAsrSettings((prev) => ({ ...prev, apiKey: event.target.value }));
+                              setAsrTestResult(null);
+                            }}
+                            placeholder="sk-…"
                             className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                          >
-                            <option value="">-</option>
-                            {cloudSettings.providers.filter((provider) => provider.enabled).map((provider) => (
-                              <option key={provider.id} value={provider.id}>
-                                {buildProviderLabel(provider)}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="mt-3 grid gap-3 md:grid-cols-3">
-                          <div>
-                            <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTargetLanguage")}</label>
-                            <select
-                              value={cloudSettings.pipeline.targetLanguage || "en"}
-                              onChange={(event) => updateCloudPipeline("targetLanguage", event.target.value)}
-                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                            >
-                              {TARGET_LANGUAGE_OPTIONS.map((item) => (
-                                <option key={item.value} value={item.value}>
-                                  {uiLang === "zh" ? item.labelZh : item.labelEn}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudTimeoutMs")}</label>
-                            <input
-                              type="number"
-                              value={cloudSettings.pipeline.timeoutMs}
-                              onChange={(event) => updateCloudPipeline("timeoutMs", Number(event.target.value) || 10000)}
-                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                            />
-                          </div>
-                          <div>
-                            <label className="mb-1 block text-sm text-slate-700">{t("settingsCloudRetries")}</label>
-                            <input
-                              type="number"
-                              value={cloudSettings.pipeline.maxRetries}
-                              onChange={(event) => updateCloudPipeline("maxRetries", Number(event.target.value) || 0)}
-                              className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="mb-1 mt-3 block text-sm text-slate-700">{t("settingsCloudTranslatePrompt")}</label>
-                          <textarea
-                            value={cloudSettings.pipeline.translatePrompt}
-                            onChange={(event) => updateCloudPipeline("translatePrompt", event.target.value)}
-                            className="min-h-[96px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
                           />
                         </div>
-                      </div>
+                        <div>
+                          <label className="mb-1 block text-sm text-slate-700">{t("asrBaseUrlLabel")}</label>
+                          <input
+                            value={asrSettings.baseUrl}
+                            onChange={(event) => {
+                              setAsrSettings((prev) => ({ ...prev, baseUrl: event.target.value }));
+                              setAsrTestResult(null);
+                            }}
+                            placeholder={
+                              asrSettings.provider === "openai-whisper" ? "https://api.openai.com/v1"
+                                : asrSettings.provider === "groq-whisper" ? "https://api.groq.com/openai/v1"
+                                  : "https://your-endpoint/v1"
+                            }
+                            className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          />
+                          {asrSettings.provider !== "openai-compatible" && (
+                            <p className="mt-1 text-xs text-slate-500">{t("asrBaseUrlOptional")}</p>
+                          )}
+                        </div>
+                      </>
+                    )}
 
-                      <div className="flex gap-2">
-                        <Button variant="outline" onClick={onSaveCloudSettings} disabled={savingCloudSettings}>
-                          {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
-                          {t("settingsCloudSave")}
-                        </Button>
+                    {asrTestResult && (
+                      <div
+                        className={cn(
+                          "rounded-md border px-3 py-2 text-xs",
+                          asrTestResult.ok
+                            ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                            : "border-rose-300 bg-rose-50 text-rose-900"
+                        )}
+                      >
+                        <span className="font-semibold">
+                          {asrTestResult.ok ? t("asrTestOk") : t("asrTestFailed")}
+                        </span>
+                        {asrTestResult.message && <span>: {asrTestResult.message}</span>}
                       </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" onClick={onTestAsrSettings} disabled={testingAsr || savingAsr}>
+                        {testingAsr ? <Loader2 size={14} className="animate-spin" /> : null}
+                        {testingAsr ? t("asrTesting") : t("asrTest")}
+                      </Button>
+                      <Button variant="outline" onClick={onSaveAsrSettings} disabled={savingAsr}>
+                        {savingAsr ? <Loader2 size={14} className="animate-spin" /> : null}
+                        {savingAsr ? t("asrSaving") : t("asrSave")}
+                      </Button>
                     </div>
                   </Card>
                   )}
 
-                  {settingsSection === "providers" && (
+                  {settingsSection === "pipeline" && (
                   <Card className="tm-settings-card p-4">
-                    <p className="text-sm text-slate-600">{t("settingsProvidersDesc")}</p>
-                    <p className="mt-2 text-xs text-slate-500">{t("settingsProvidersGuide")}</p>
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="text-sm font-medium text-slate-700">{t("settingsCloudProviders")}</div>
-                      <Button variant="outline" onClick={addCloudProvider}>
-                        <Plus size={14} />
-                        {t("settingsCloudAddProvider")}
-                      </Button>
-                    </div>
-                    <div className="mt-3 space-y-3">
-                      {cloudSettings.providers.map((provider, index) => (
-                        <div key={`${provider.id}-${index}`} className="rounded-lg border border-slate-200 p-3">
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderVendor")}</label>
-                              <select
-                                value={provider.vendor}
-                                onChange={(event) => updateCloudProvider(index, { vendor: event.target.value as CloudVendor })}
-                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                              >
-                                {CLOUD_VENDOR_OPTIONS.map((item) => (
-                                  <option key={item.value} value={item.value}>
-                                    {item.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderModel")}</label>
-                              <input
-                                value={provider.model}
-                                onChange={(event) => updateCloudProvider(index, { model: event.target.value })}
-                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderApiKey")}</label>
-                              <input
-                                type="password"
-                                value={provider.apiKey}
-                                onChange={(event) => updateCloudProvider(index, { apiKey: event.target.value })}
-                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                              />
-                              {CLOUD_VENDOR_KEY_GUIDES[provider.vendor] ? (
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {t("settingsCloudProviderApiKeyHint")} ·{" "}
-                                  <a
-                                    href={CLOUD_VENDOR_KEY_GUIDES[provider.vendor] ?? "#"}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-sky-700 hover:text-sky-800 hover:underline"
-                                  >
-                                    {t("settingsCloudProviderApiKeyDocs")}
-                                  </a>
-                                </div>
-                              ) : (
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {t("settingsCloudProviderNoApiKeyNeeded")}
-                                </div>
-                              )}
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderBaseUrl")}</label>
-                              <input
-                                value={provider.baseUrl ?? ""}
-                                onChange={(event) => updateCloudProvider(index, { baseUrl: event.target.value })}
-                                className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
-                              />
-                            </div>
-                          </div>
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
-                            <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-                              <input
-                                type="checkbox"
-                                checked={provider.enabled}
-                                onChange={(event) => updateCloudProvider(index, { enabled: event.target.checked })}
-                                className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
-                              />
-                              {t("settingsCloudProviderEnabled")}
-                            </label>
-                            <Button
-                              variant="outline"
-                              onClick={() => void onTestCloudProvider(provider.id)}
-                              disabled={testingProviderId === provider.id || savingCloudSettings}
-                            >
-                              {testingProviderId === provider.id ? <Loader2 size={14} className="animate-spin" /> : null}
-                              {testingProviderId === provider.id ? t("settingsCloudTesting") : t("settingsCloudTest")}
-                            </Button>
-                            <Button variant="outline" onClick={() => removeCloudProvider(index)}>
-                              {t("settingsCloudRemoveProvider")}
-                            </Button>
-                          </div>
-                          {providerTestResults[provider.id] && (
-                            <div
-                              className={cn(
-                                "mt-2 text-xs",
-                                providerTestResults[provider.id]?.ok ? "text-emerald-600" : "text-rose-600"
-                              )}
-                            >
-                              {(providerTestResults[provider.id]?.ok ? t("settingsCloudTestOk") : t("settingsCloudTestFailed")) +
-                                `: ${providerTestResults[provider.id]?.message}`}
-                            </div>
-                          )}
+                    <p className="text-sm text-slate-600">{t("pipelineDesc")}</p>
+                    <p className="mt-2 text-xs text-slate-500">{t("pipelineGuide")}</p>
+
+                    <label className="mt-3 flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={cloudSettings.pipeline.enabled}
+                        onChange={(event) => updateCloudPipeline("enabled", event.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                      />
+                      <span>{t("settingsCloudEnabled")}</span>
+                    </label>
+
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-white/70 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">① {t("pipelineStepDictionary")}</div>
+                          <p className="mt-1 text-xs text-slate-500">{t("pipelineStepDictionaryDesc")}</p>
                         </div>
-                      ))}
-                      <div className="flex gap-2">
-                        <Button variant="outline" onClick={onSaveProvidersOnly} disabled={savingCloudSettings}>
-                          {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
-                          {t("settingsProvidersSave")}
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs text-slate-500">
+                          {t("dictionaryWords", { count: dictionaryWords.length })}
+                        </span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <input
+                          value={newWord}
+                          onChange={(event) => setNewWord(event.target.value)}
+                          onKeyDown={(event) => { if (event.key === "Enter") addDictionaryWord(); }}
+                          placeholder={t("dictionaryPlaceholder")}
+                          className="h-9 min-w-[180px] flex-1 rounded-md border border-slate-300 px-3 text-sm outline-none ring-sky-300 transition focus:ring"
+                        />
+                        <Button onClick={addDictionaryWord} className="h-9">
+                          <Plus size={14} />
+                          {t("dictionaryAdd")}
                         </Button>
                       </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {dictionaryWords.map((word) => (
+                          <div key={word} className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs">
+                            <span>{word}</span>
+                            <button
+                              type="button"
+                              className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              onClick={() => removeDictionaryWord(word)}
+                              title={t("dictionaryDelete")}
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))}
+                        {dictionaryWords.length === 0 && (
+                          <div className="text-xs text-slate-400">{t("dictionaryEmpty")}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <details className="mt-4 rounded-xl border border-slate-200 bg-white/70 p-3 group">
+                      <summary className="flex cursor-pointer items-center justify-between gap-2 text-sm font-semibold text-slate-900">
+                        <span>
+                          {t("pipelineProviderManager")}
+                          <span className="ml-2 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-normal text-slate-500">
+                            {cloudSettings.providers.length}
+                          </span>
+                        </span>
+                      </summary>
+                      <div className="mt-3 flex justify-end">
+                        <Button variant="outline" onClick={addCloudProvider} className="h-8 text-xs">
+                          <Plus size={12} />
+                          {t("settingsCloudAddProvider")}
+                        </Button>
+                      </div>
+                      <div className="mt-3 space-y-3">
+                        {cloudSettings.providers.map((provider, index) => (
+                          <div key={`${provider.id}-${index}`} className="rounded-lg border border-slate-200 p-3">
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderVendor")}</label>
+                                <select
+                                  value={provider.vendor}
+                                  onChange={(event) => updateCloudProvider(index, { vendor: event.target.value as CloudVendor })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                >
+                                  {CLOUD_VENDOR_OPTIONS.map((item) => (
+                                    <option key={item.value} value={item.value}>{item.label}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderModel")}</label>
+                                <input
+                                  value={provider.model}
+                                  onChange={(event) => updateCloudProvider(index, { model: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderApiKey")}</label>
+                                <input
+                                  type="password"
+                                  value={provider.apiKey}
+                                  onChange={(event) => updateCloudProvider(index, { apiKey: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                                {CLOUD_VENDOR_KEY_GUIDES[provider.vendor] ? (
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {t("settingsCloudProviderApiKeyHint")} ·{" "}
+                                    <a
+                                      href={CLOUD_VENDOR_KEY_GUIDES[provider.vendor] ?? "#"}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-sky-700 hover:text-sky-800 hover:underline"
+                                    >
+                                      {t("settingsCloudProviderApiKeyDocs")}
+                                    </a>
+                                  </div>
+                                ) : (
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {t("settingsCloudProviderNoApiKeyNeeded")}
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudProviderBaseUrl")}</label>
+                                <input
+                                  value={provider.baseUrl ?? ""}
+                                  onChange={(event) => updateCloudProvider(index, { baseUrl: event.target.value })}
+                                  className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  checked={provider.enabled}
+                                  onChange={(event) => updateCloudProvider(index, { enabled: event.target.checked })}
+                                  className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-400"
+                                />
+                                {t("settingsCloudProviderEnabled")}
+                              </label>
+                              <Button
+                                variant="outline"
+                                onClick={() => void onTestCloudProvider(provider.id)}
+                                disabled={testingProviderId === provider.id || savingCloudSettings}
+                              >
+                                {testingProviderId === provider.id ? <Loader2 size={14} className="animate-spin" /> : null}
+                                {testingProviderId === provider.id ? t("settingsCloudTesting") : t("settingsCloudTest")}
+                              </Button>
+                              <Button variant="outline" onClick={() => removeCloudProvider(index)}>
+                                {t("settingsCloudRemoveProvider")}
+                              </Button>
+                            </div>
+                            {providerTestResults[provider.id] && (
+                              <div
+                                className={cn(
+                                  "mt-2 text-xs",
+                                  providerTestResults[provider.id]?.ok ? "text-emerald-600" : "text-rose-600"
+                                )}
+                              >
+                                {(providerTestResults[provider.id]?.ok ? t("settingsCloudTestOk") : t("settingsCloudTestFailed")) +
+                                  `: ${providerTestResults[provider.id]?.message}`}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-white/70 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">② {t("pipelineStepOptimize")}</div>
+                          <p className="mt-1 text-xs text-slate-500">{t("pipelineStepOptimizeDesc")}</p>
+                        </div>
+                        <span className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                          cloudSettings.pipeline.optimizeProviderId
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-100 text-slate-500"
+                        )}>
+                          {cloudSettings.pipeline.optimizeProviderId ? t("pipelineStepOn") : t("pipelineStepOff")}
+                        </span>
+                      </div>
+                      <div className="mt-3">
+                        <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudOptimizeProvider")}</label>
+                        <select
+                          value={cloudSettings.pipeline.optimizeProviderId}
+                          onChange={(event) => updateCloudPipeline("optimizeProviderId", event.target.value)}
+                          className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                        >
+                          <option value="">{t("pipelineSelectProviderNone")}</option>
+                          {cloudSettings.providers.filter((p) => p.enabled).map((p) => (
+                            <option key={p.id} value={p.id}>{buildProviderLabel(p)}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="mt-3">
+                        <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudOptimizePrompt")}</label>
+                        <textarea
+                          value={cloudSettings.pipeline.optimizePrompt}
+                          onChange={(event) => updateCloudPipeline("optimizePrompt", event.target.value)}
+                          className="min-h-[72px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-white/70 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900">③ {t("pipelineStepTranslate")}</div>
+                          <p className="mt-1 text-xs text-slate-500">{t("pipelineStepTranslateDesc")}</p>
+                        </div>
+                        <span className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                          cloudSettings.pipeline.translateProviderId
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-100 text-slate-500"
+                        )}>
+                          {cloudSettings.pipeline.translateProviderId ? t("pipelineStepOn") : t("pipelineStepOff")}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudTranslateProvider")}</label>
+                          <select
+                            value={cloudSettings.pipeline.translateProviderId}
+                            onChange={(event) => updateCloudPipeline("translateProviderId", event.target.value)}
+                            className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          >
+                            <option value="">{t("pipelineSelectProviderNone")}</option>
+                            {cloudSettings.providers.filter((p) => p.enabled).map((p) => (
+                              <option key={p.id} value={p.id}>{buildProviderLabel(p)}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudTargetLanguage")}</label>
+                          <select
+                            value={cloudSettings.pipeline.targetLanguage || "en"}
+                            onChange={(event) => updateCloudPipeline("targetLanguage", event.target.value)}
+                            className="h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none ring-sky-300 focus:ring"
+                          >
+                            {TARGET_LANGUAGE_OPTIONS.map((item) => (
+                              <option key={item.value} value={item.value}>{uiLang === "zh" ? item.labelZh : item.labelEn}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <label className="mb-1 block text-xs text-slate-600">{t("settingsCloudTranslatePrompt")}</label>
+                        <textarea
+                          value={cloudSettings.pipeline.translatePrompt}
+                          onChange={(event) => updateCloudPipeline("translatePrompt", event.target.value)}
+                          className="min-h-[72px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-sky-300 focus:ring"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex gap-2">
+                      <Button variant="outline" onClick={onSaveCloudSettings} disabled={savingCloudSettings}>
+                        {savingCloudSettings ? <Loader2 size={14} className="animate-spin" /> : null}
+                        {t("settingsCloudSave")}
+                      </Button>
                     </div>
                   </Card>
                   )}

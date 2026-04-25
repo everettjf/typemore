@@ -1,5 +1,11 @@
 #![allow(unexpected_cfgs)]
 
+mod asr;
+mod hotkey;
+
+use asr::{
+    resolve_base_url, transcribe_via_openai_compatible, AsrProviderKind, AsrSettings, TestAsrResult,
+};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rig::{client::CompletionClient, completion::Prompt};
 use serde::{Deserialize, Serialize};
@@ -44,25 +50,10 @@ const INIT_EVENT: &str = "model-init-progress";
 const HOTKEY_EVENT: &str = "global-shortcut-triggered";
 const OVERLAY_EVENT: &str = "overlay-state";
 const RECORDING_SAVED_EVENT: &str = "recording-saved";
-#[cfg(target_os = "windows")]
-const HOTKEY_TOGGLE_DICTATION: &str = "F8";
-#[cfg(not(target_os = "windows"))]
 const HOTKEY_TOGGLE_DICTATION: &str = "";
-#[cfg(target_os = "windows")]
-const HOTKEY_TOGGLE_TRANSLATION: &str = "F9";
-#[cfg(not(target_os = "windows"))]
-const HOTKEY_TOGGLE_TRANSLATION: &str = "";
-#[cfg(target_os = "windows")]
-const PREVIOUS_WINDOWS_HOTKEY_DICTATION: &str = "CommandOrControl+Shift+F9";
-#[cfg(target_os = "windows")]
-const PREVIOUS_WINDOWS_HOTKEY_TRANSLATION: &str = "CommandOrControl+Shift+F10";
-const LEGACY_HOTKEY_DICTATION_V1: &str = "CommandOrControl+Alt+Space";
-const LEGACY_HOTKEY_TRANSLATION_V1: &str = "CommandOrControl+Alt+Enter";
-const LEGACY_HOTKEY_DICTATION_V2: &str = "CommandOrControl+Shift+S";
-const LEGACY_HOTKEY_TRANSLATION_V2: &str = "CommandOrControl+Alt+Enter";
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
-const OVERLAY_WIDTH: f64 = 140.0;
-const OVERLAY_HEIGHT: f64 = 25.0;
+const OVERLAY_WIDTH: f64 = 300.0;
+const OVERLAY_HEIGHT: f64 = 56.0;
 const OVERLAY_BOTTOM_MARGIN: i32 = 150;
 const OVERLAY_TOP_MARGIN: i32 = 90;
 const MAX_RECORDING_SECS: u64 = 90;
@@ -74,7 +65,6 @@ static PANIC_HOOK_ONCE: Once = Once::new();
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
-    fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
     fn CGEventCreate(source: *const c_void) -> *const c_void;
     fn CGEventGetLocation(event: *const c_void) -> CGPoint;
     fn CFRelease(cf: *const c_void);
@@ -99,169 +89,24 @@ fn macos_mouse_position() -> Option<PhysicalPosition<f64>> {
     Some(PhysicalPosition::new(location.x, location.y))
 }
 
-#[cfg(target_os = "macos")]
-fn start_macos_fn_key_monitor(app: &AppHandle) -> Result<(), String> {
-    let app_handle = app.clone();
-    std::thread::spawn(move || {
-        // kCGEventSourceStateHIDSystemState
-        const STATE_HID_SYSTEM: i32 = 1;
-        // kCGEventSourceStateCombinedSessionState
-        const STATE_COMBINED_SESSION: i32 = 0;
-        // macOS virtual keycode for Fn/Globe.
-        const KEYCODE_FN: u16 = 63;
-        const KEYCODE_LEFT_SHIFT: u16 = 56;
-        const KEYCODE_RIGHT_SHIFT: u16 = 60;
-        // Give users enough time to press Shift after holding Fn.
-        // This prioritizes the "Fn -> Shift" translation gesture.
-        const DECIDE_WINDOW_MS: u128 = 520;
-
-        let mut was_down = false;
-        let mut active_action: Option<&'static str> = None;
-        let mut press_started_at: Option<Instant> = None;
-        let mut shift_seen = false;
-        let mut prev_shift_down = false;
-        let mut pressed_emitted = false;
-
-        let choose_action = |shift_intent: bool,
-                             fn_dictation_enabled: bool,
-                             fn_translation_enabled: bool|
-         -> Option<&'static str> {
-            if shift_intent {
-                if fn_translation_enabled {
-                    Some("toggle-translation")
-                } else {
-                    None
-                }
-            } else if fn_dictation_enabled {
-                Some("toggle-dictation")
-            } else {
-                None
-            }
-        };
-
-        loop {
-            let is_down = unsafe {
-                CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_FN)
-                    || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_FN)
-            };
-            let shift_down = unsafe {
-                CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_LEFT_SHIFT)
-                    || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_LEFT_SHIFT)
-                    || CGEventSourceKeyState(STATE_HID_SYSTEM, KEYCODE_RIGHT_SHIFT)
-                    || CGEventSourceKeyState(STATE_COMBINED_SESSION, KEYCODE_RIGHT_SHIFT)
-            };
-            let fn_dictation_enabled = app_handle
+fn start_double_tap_modifier_monitor(app: &AppHandle) -> Result<(), String> {
+    let enabled_app = app.clone();
+    let fire_app = app.clone();
+    hotkey::spawn_double_tap_monitor(
+        move || {
+            enabled_app
                 .state::<AppState>()
-                .fn_dictation_enabled
+                .double_tap_enabled
                 .lock()
                 .map(|v| *v)
-                .unwrap_or(false);
-            let fn_translation_enabled = app_handle
-                .state::<AppState>()
-                .fn_translation_enabled
-                .lock()
-                .map(|v| *v)
-                .unwrap_or(false);
-            let trigger_mode = app_handle
-                .state::<AppState>()
-                .trigger_mode
-                .lock()
-                .map(|v| *v)
-                .unwrap_or(default_trigger_mode());
-
-            if is_down && !was_down {
-                press_started_at = Some(Instant::now());
-                shift_seen = shift_down;
-                pressed_emitted = false;
-                active_action = None;
-                if fn_dictation_enabled || fn_translation_enabled {
-                    let _ = emit_overlay_state(
-                        &app_handle,
-                        "listening",
-                        Some(localize_text(&app_handle, "Listening", "Listening")),
-                        Some(0.0),
-                    );
-                }
-            } else if is_down && was_down {
-                let shift_rising = !prev_shift_down && shift_down;
-                shift_seen |= shift_down;
-                if shift_rising && fn_translation_enabled {
-                    // Once Shift is detected while Fn is held, lock this session to translation.
-                    if pressed_emitted && active_action == Some("toggle-dictation") {
-                        // If long-press already started dictation, switch to translation immediately.
-                        emit_hotkey_event(&app_handle, "toggle-dictation", "Fn", "released");
-                        handle_native_hotkey_event(&app_handle, "toggle-dictation", "released");
-                        pressed_emitted = false;
-                        active_action = None;
-                    }
-                    if !pressed_emitted {
-                        let action = "toggle-translation";
-                        eprintln!("[typemore][fn] pressed action={} shift=true", action);
-                        active_action = Some(action);
-                        emit_hotkey_event(&app_handle, action, "Fn+Shift", "pressed");
-                        handle_native_hotkey_event(&app_handle, action, "pressed");
-                        pressed_emitted = true;
-                    }
-                }
-                if !pressed_emitted
-                    && press_started_at
-                        .map(|t| t.elapsed().as_millis() >= DECIDE_WINDOW_MS)
-                        .unwrap_or(false)
-                    && trigger_mode == HotkeyTriggerMode::LongPress
-                {
-                    let action =
-                        choose_action(shift_seen, fn_dictation_enabled, fn_translation_enabled);
-                    if let Some(action) = action {
-                        eprintln!(
-                            "[typemore][fn] pressed action={} shift={}",
-                            action, shift_seen
-                        );
-                        active_action = Some(action);
-                        let shortcut = if shift_seen { "Fn+Shift" } else { "Fn" };
-                        emit_hotkey_event(&app_handle, action, shortcut, "pressed");
-                        handle_native_hotkey_event(&app_handle, action, "pressed");
-                    }
-                    pressed_emitted = true;
-                }
-            } else if !is_down && was_down {
-                // For very quick taps, emit press on release so tap mode still works.
-                if !pressed_emitted {
-                    let action = choose_action(
-                        shift_seen || shift_down,
-                        fn_dictation_enabled,
-                        fn_translation_enabled,
-                    );
-                    if let Some(action) = action {
-                        eprintln!(
-                            "[typemore][fn] pressed action={} shift={}",
-                            action,
-                            shift_seen || shift_down
-                        );
-                        active_action = Some(action);
-                        let shortcut = if shift_seen || shift_down {
-                            "Fn+Shift"
-                        } else {
-                            "Fn"
-                        };
-                        emit_hotkey_event(&app_handle, action, shortcut, "pressed");
-                        handle_native_hotkey_event(&app_handle, action, "pressed");
-                    }
-                }
-
-                if let Some(action) = active_action.take() {
-                    eprintln!("[typemore][fn] released action={}", action);
-                    emit_hotkey_event(&app_handle, action, "Fn", "released");
-                    handle_native_hotkey_event(&app_handle, action, "released");
-                }
-                press_started_at = None;
-                shift_seen = false;
-                pressed_emitted = false;
-            }
-            prev_shift_down = shift_down;
-            was_down = is_down;
-            std::thread::sleep(std::time::Duration::from_millis(16));
-        }
-    });
+                .unwrap_or(false)
+        },
+        move || {
+            eprintln!("[typemore][double-tap] fired toggle-dictation");
+            emit_hotkey_event(&fire_app, "toggle-dictation", "DoubleTap", "pressed");
+            handle_native_hotkey_event(&fire_app, "toggle-dictation", "pressed");
+        },
+    );
     Ok(())
 }
 
@@ -347,16 +192,13 @@ impl Default for ModelInitStatus {
 struct AppState {
     init_status: Mutex<ModelInitStatus>,
     hotkeys: Mutex<HotkeyConfig>,
-    fn_dictation_enabled: Mutex<bool>,
-    fn_translation_enabled: Mutex<bool>,
-    trigger_mode: Mutex<HotkeyTriggerMode>,
+    double_tap_enabled: Mutex<bool>,
     overlay_position: Mutex<OverlayPosition>,
     output_mode: Mutex<OutputMode>,
-    translation_target: Mutex<TranslationTargetLang>,
     ui_language: Mutex<UiLanguage>,
     cloud_settings: Mutex<CloudSettings>,
+    asr_settings: Mutex<AsrSettings>,
     dictionary_words: Mutex<Vec<String>>,
-    hotkey_runtime: Mutex<HotkeyRuntimeState>,
     native_hotkey_session: Mutex<NativeHotkeySession>,
     native_recorder_tx: Mutex<Option<mpsc::Sender<NativeRecorderCommand>>>,
 }
@@ -365,15 +207,6 @@ struct AppState {
 struct HotkeyConfig {
     dictation: String,
     dictation_id: Option<u32>,
-    translation: String,
-    translation_id: Option<u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum HotkeyTriggerMode {
-    Tap,
-    LongPress,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -389,20 +222,6 @@ enum OutputMode {
     AutoPaste,
     PasteAndKeep,
     CopyOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum TranslationTargetLang {
-    #[serde(rename = "auto")]
-    Auto,
-    #[serde(rename = "en")]
-    En,
-    #[serde(rename = "zh-CN")]
-    ZhCn,
-    #[serde(rename = "ja")]
-    Ja,
-    #[serde(rename = "ko")]
-    Ko,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -495,11 +314,6 @@ enum UiLanguage {
     En,
 }
 
-#[derive(Debug, Clone)]
-struct HotkeyRuntimeState {
-    suppress_dictation_until: Option<Instant>,
-}
-
 struct NativeRecorder {
     stream: cpal::Stream,
     samples: Arc<Mutex<Vec<f32>>>,
@@ -556,35 +370,23 @@ enum NativeRecorderCommand {
 #[serde(rename_all = "camelCase")]
 struct HotkeySettings {
     dictation: String,
-    translation: String,
-    fn_dictation_enabled: bool,
-    fn_translation_enabled: bool,
-    trigger_mode: HotkeyTriggerMode,
+    double_tap_enabled: bool,
     overlay_position: OverlayPosition,
     output_mode: OutputMode,
-    translation_target: TranslationTargetLang,
     ui_language: UiLanguage,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PersistedHotkeySettings {
-    #[serde(default = "default_hotkey_dictation", alias = "toggle")]
+    #[serde(default = "default_hotkey_dictation")]
     dictation: String,
-    #[serde(default = "default_hotkey_translation")]
-    translation: String,
-    #[serde(default = "default_fn_dictation_enabled")]
-    fn_dictation_enabled: bool,
-    #[serde(default = "default_fn_translation_enabled")]
-    fn_translation_enabled: bool,
-    #[serde(default = "default_trigger_mode")]
-    trigger_mode: HotkeyTriggerMode,
+    #[serde(default = "default_double_tap_enabled")]
+    double_tap_enabled: bool,
     #[serde(default = "default_overlay_position")]
     overlay_position: OverlayPosition,
     #[serde(default = "default_output_mode")]
     output_mode: OutputMode,
-    #[serde(default = "default_translation_target")]
-    translation_target: TranslationTargetLang,
     #[serde(default = "default_ui_language")]
     ui_language: UiLanguage,
 }
@@ -598,23 +400,6 @@ struct OverlayStatePayload {
 }
 
 fn emit_hotkey_event(app: &AppHandle, action: &str, shortcut: &str, state: &str) {
-    if state == "pressed" {
-        let now = Instant::now();
-        let state_guard = app.state::<AppState>();
-        let Ok(mut runtime) = state_guard.hotkey_runtime.lock() else {
-            return;
-        };
-        if action == "toggle-translation" {
-            runtime.suppress_dictation_until = Some(now + std::time::Duration::from_millis(260));
-        } else if action == "toggle-dictation"
-            && runtime
-                .suppress_dictation_until
-                .is_some_and(|until| now < until)
-        {
-            return;
-        }
-    }
-
     eprintln!(
         "[typemore][hotkey] action={} shortcut={} state={}",
         action, shortcut, state
@@ -711,21 +496,15 @@ impl Default for AppState {
         Self {
             init_status: Mutex::new(ModelInitStatus::default()),
             hotkeys: Mutex::new(
-                build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)
-                    .expect("invalid default hotkeys"),
+                build_hotkey_config(HOTKEY_TOGGLE_DICTATION).expect("invalid default hotkeys"),
             ),
-            fn_dictation_enabled: Mutex::new(default_fn_dictation_enabled()),
-            fn_translation_enabled: Mutex::new(default_fn_translation_enabled()),
-            trigger_mode: Mutex::new(default_trigger_mode()),
+            double_tap_enabled: Mutex::new(default_double_tap_enabled()),
             overlay_position: Mutex::new(default_overlay_position()),
             output_mode: Mutex::new(default_output_mode()),
-            translation_target: Mutex::new(default_translation_target()),
             ui_language: Mutex::new(default_ui_language()),
             cloud_settings: Mutex::new(CloudSettings::default()),
+            asr_settings: Mutex::new(AsrSettings::default()),
             dictionary_words: Mutex::new(Vec::new()),
-            hotkey_runtime: Mutex::new(HotkeyRuntimeState {
-                suppress_dictation_until: None,
-            }),
             native_hotkey_session: Mutex::new(NativeHotkeySession::default()),
             native_recorder_tx: Mutex::new(None),
         }
@@ -741,24 +520,12 @@ struct CachedTranscript {
 
 type TranscriptCacheMap = HashMap<String, CachedTranscript>;
 
-const fn default_fn_dictation_enabled() -> bool {
-    cfg!(target_os = "macos")
-}
-
-const fn default_fn_translation_enabled() -> bool {
-    cfg!(target_os = "macos")
+const fn default_double_tap_enabled() -> bool {
+    true
 }
 
 fn default_hotkey_dictation() -> String {
     HOTKEY_TOGGLE_DICTATION.to_string()
-}
-
-fn default_hotkey_translation() -> String {
-    HOTKEY_TOGGLE_TRANSLATION.to_string()
-}
-
-const fn default_trigger_mode() -> HotkeyTriggerMode {
-    HotkeyTriggerMode::Tap
 }
 
 const fn default_overlay_position() -> OverlayPosition {
@@ -767,10 +534,6 @@ const fn default_overlay_position() -> OverlayPosition {
 
 const fn default_output_mode() -> OutputMode {
     OutputMode::AutoPaste
-}
-
-const fn default_translation_target() -> TranslationTargetLang {
-    TranslationTargetLang::Auto
 }
 
 const fn default_ui_language() -> UiLanguage {
@@ -825,50 +588,20 @@ impl Default for CloudSettings {
     }
 }
 
-fn build_hotkey_config(dictation: &str, translation: &str) -> Result<HotkeyConfig, String> {
+fn build_hotkey_config(dictation: &str) -> Result<HotkeyConfig, String> {
     let dictation = dictation.trim();
-    let translation = translation.trim();
-
-    let dictation_set = !dictation.is_empty();
-    let translation_set = !translation.is_empty();
-    if dictation_set && translation_set && dictation == translation {
-        return Err("dictation and translation hotkeys must be different".into());
-    }
-
-    let dictation_id = if dictation_set {
-        let dictation_shortcut: tauri_plugin_global_shortcut::Shortcut = dictation
+    let dictation_id = if dictation.is_empty() {
+        None
+    } else {
+        let shortcut: tauri_plugin_global_shortcut::Shortcut = dictation
             .parse()
             .map_err(|e| format!("invalid dictation shortcut: {e}"))?;
-        Some(dictation_shortcut.id())
-    } else {
-        None
+        Some(shortcut.id())
     };
-    let translation_id = if translation_set {
-        let translation_shortcut: tauri_plugin_global_shortcut::Shortcut = translation
-            .parse()
-            .map_err(|e| format!("invalid translation shortcut: {e}"))?;
-        Some(translation_shortcut.id())
-    } else {
-        None
-    };
-
     Ok(HotkeyConfig {
         dictation: dictation.to_string(),
         dictation_id,
-        translation: translation.to_string(),
-        translation_id,
     })
-}
-
-fn is_legacy_default_hotkeys(dictation: &str, translation: &str) -> bool {
-    (dictation == LEGACY_HOTKEY_DICTATION_V1 && translation == LEGACY_HOTKEY_TRANSLATION_V1)
-        || (dictation == LEGACY_HOTKEY_DICTATION_V2 && translation == LEGACY_HOTKEY_TRANSLATION_V2)
-}
-
-#[cfg(target_os = "windows")]
-fn is_previous_windows_default_hotkeys(dictation: &str, translation: &str) -> bool {
-    dictation == PREVIOUS_WINDOWS_HOTKEY_DICTATION
-        && translation == PREVIOUS_WINDOWS_HOTKEY_TRANSLATION
 }
 
 fn apply_hotkey_shortcuts(
@@ -893,25 +626,11 @@ fn apply_hotkey_shortcuts(
             .unregister(old_config.dictation.as_str())
             .map_err(|e| format!("failed to unregister old dictation shortcut: {e}"))?;
     }
-    if !old_config.translation.is_empty()
-        && old_config.translation != new_config.translation
-        && manager.is_registered(old_config.translation.as_str())
-    {
-        manager
-            .unregister(old_config.translation.as_str())
-            .map_err(|e| format!("failed to unregister old translation shortcut: {e}"))?;
-    }
 
     if !new_config.dictation.is_empty() && !manager.is_registered(new_config.dictation.as_str()) {
         manager
             .register(new_config.dictation.as_str())
             .map_err(|e| format!("failed to register dictation shortcut: {e}"))?;
-    }
-    if !new_config.translation.is_empty() && !manager.is_registered(new_config.translation.as_str())
-    {
-        manager
-            .register(new_config.translation.as_str())
-            .map_err(|e| format!("failed to register translation shortcut: {e}"))?;
     }
 
     {
@@ -927,27 +646,17 @@ fn apply_hotkey_shortcuts(
 
 fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
     let state = app.state::<AppState>();
-    let (dictation, translation) = {
+    let dictation = {
         let lock = state
             .hotkeys
             .lock()
             .map_err(|_| "failed to read hotkey settings".to_string())?;
-        (lock.dictation.clone(), lock.translation.clone())
+        lock.dictation.clone()
     };
-    let fn_dictation_enabled = state
-        .fn_dictation_enabled
+    let double_tap_enabled = state
+        .double_tap_enabled
         .lock()
-        .map_err(|_| "failed to read fn dictation settings".to_string())
-        .map(|v| *v)?;
-    let fn_translation_enabled = state
-        .fn_translation_enabled
-        .lock()
-        .map_err(|_| "failed to read fn translation settings".to_string())
-        .map(|v| *v)?;
-    let trigger_mode = state
-        .trigger_mode
-        .lock()
-        .map_err(|_| "failed to read trigger mode settings".to_string())
+        .map_err(|_| "failed to read double-tap settings".to_string())
         .map(|v| *v)?;
     let overlay_position = state
         .overlay_position
@@ -959,11 +668,6 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
         .lock()
         .map_err(|_| "failed to read output mode settings".to_string())
         .map(|v| *v)?;
-    let translation_target = state
-        .translation_target
-        .lock()
-        .map_err(|_| "failed to read translation target settings".to_string())
-        .map(|v| *v)?;
     let ui_language = state
         .ui_language
         .lock()
@@ -972,13 +676,9 @@ fn collect_hotkey_settings(app: &AppHandle) -> Result<HotkeySettings, String> {
 
     Ok(HotkeySettings {
         dictation,
-        translation,
-        fn_dictation_enabled,
-        fn_translation_enabled,
-        trigger_mode,
+        double_tap_enabled,
         overlay_position,
         output_mode,
-        translation_target,
         ui_language,
     })
 }
@@ -989,13 +689,9 @@ fn save_current_hotkey_settings(app: &AppHandle) -> Result<(), String> {
         app,
         &PersistedHotkeySettings {
             dictation: current.dictation,
-            translation: current.translation,
-            fn_dictation_enabled: current.fn_dictation_enabled,
-            fn_translation_enabled: current.fn_translation_enabled,
-            trigger_mode: current.trigger_mode,
+            double_tap_enabled: current.double_tap_enabled,
             overlay_position: current.overlay_position,
             output_mode: current.output_mode,
-            translation_target: current.translation_target,
             ui_language: current.ui_language,
         },
     )
@@ -1138,6 +834,29 @@ fn save_persisted_cloud_settings(app: &AppHandle, settings: &CloudSettings) -> R
     let raw = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("failed to serialize cloud settings: {e}"))?;
     fs::write(path, raw).map_err(|e| format!("failed to write cloud settings: {e}"))
+}
+
+fn asr_settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("asr_settings.json"))
+}
+
+fn load_persisted_asr_settings(app: &AppHandle) -> Result<Option<AsrSettings>, String> {
+    let path = asr_settings_file(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| format!("failed to read asr settings: {e}"))?;
+    let parsed = serde_json::from_str::<AsrSettings>(&raw)
+        .map_err(|e| format!("failed to parse asr settings: {e}"))?;
+    Ok(Some(parsed))
+}
+
+fn save_persisted_asr_settings(app: &AppHandle, settings: &AsrSettings) -> Result<(), String> {
+    let path = asr_settings_file(app)?;
+    let raw = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("failed to serialize asr settings: {e}"))?;
+    fs::write(path, raw).map_err(|e| format!("failed to write asr settings: {e}"))
 }
 
 fn render_prompt_template(template: &str, text: &str, target_language: Option<&str>) -> String {
@@ -1492,11 +1211,15 @@ fn resolve_provider<'a>(
         .find(|p| p.enabled && p.id == provider_id)
 }
 
+/// Runs the configured post-processing pipeline against `source_text`.
+///
+/// Steps (each runs only when its provider id is set in the config):
+///   1. Optimization — passes text through the optimize LLM.
+///   2. Translation — passes the (possibly optimized) text through the translate LLM
+///      using the configured target language (auto-inferred when set to "auto").
 fn run_cloud_pipeline(
     app: &AppHandle,
     source_text: &str,
-    translate: bool,
-    target_lang_override: Option<String>,
     mut on_stage: Option<&mut dyn FnMut(&str)>,
 ) -> CloudProcessResult {
     let source = source_text.trim();
@@ -1523,110 +1246,83 @@ fn run_cloud_pipeline(
         };
     }
 
-    let optimize_provider =
-        match resolve_provider(&settings, settings.pipeline.optimize_provider_id.trim()) {
-            Some(v) => v,
-            None => {
-                return CloudProcessResult {
-                    final_text: source.to_string(),
-                    stage: "local".into(),
-                    warnings: vec!["optimize provider not configured or disabled".into()],
+    let mut warnings = Vec::<String>::new();
+    let mut current = source.to_string();
+    let mut stage = "local".to_string();
+
+    let optimize_id = settings.pipeline.optimize_provider_id.trim();
+    if !optimize_id.is_empty() {
+        match resolve_provider(&settings, optimize_id) {
+            Some(provider) => {
+                let dictionary_words = app
+                    .state::<AppState>()
+                    .dictionary_words
+                    .lock()
+                    .map(|v| v.clone())
+                    .unwrap_or_default();
+                let prompt = render_prompt_template(&settings.pipeline.optimize_prompt, source, None);
+                let prompt = append_dictionary_glossary(prompt, &dictionary_words);
+                if let Some(cb) = on_stage.as_mut() {
+                    cb("optimizing");
+                }
+                match call_provider_with_retry(
+                    provider,
+                    "You improve speech transcription text and return plain text only.",
+                    &prompt,
+                    settings.pipeline.max_retries,
+                ) {
+                    Ok(text) if !text.trim().is_empty() => {
+                        current = text;
+                        stage = "optimized".into();
+                    }
+                    Ok(_) => warnings.push("optimize returned empty response".into()),
+                    Err(err) => warnings.push(format!("optimize failed: {err}")),
                 }
             }
-        };
-
-    let optimize_user = render_prompt_template(&settings.pipeline.optimize_prompt, source, None);
-    let dictionary_words = app
-        .state::<AppState>()
-        .dictionary_words
-        .lock()
-        .map(|v| v.clone())
-        .unwrap_or_default();
-    let optimize_user = append_dictionary_glossary(optimize_user, &dictionary_words);
-    if let Some(cb) = on_stage.as_mut() {
-        cb("optimizing");
-    }
-    let optimized = match call_provider_with_retry(
-        optimize_provider,
-        "You improve speech transcription text and return plain text only.",
-        &optimize_user,
-        settings.pipeline.max_retries,
-    ) {
-        Ok(text) if !text.trim().is_empty() => text,
-        Ok(_) => source.to_string(),
-        Err(err) => {
-            return CloudProcessResult {
-                final_text: source.to_string(),
-                stage: "local".into(),
-                warnings: vec![format!("optimize failed: {err}")],
-            }
+            None => warnings.push("optimize provider not configured or disabled".into()),
         }
-    };
-
-    if !translate {
-        return CloudProcessResult {
-            final_text: optimized,
-            stage: "optimized".into(),
-            warnings: Vec::new(),
-        };
     }
 
-    let target = target_lang_override
-        .unwrap_or_else(|| settings.pipeline.target_language.clone())
-        .trim()
-        .to_string();
-    if target.is_empty() {
-        return CloudProcessResult {
-            final_text: optimized,
-            stage: "optimized".into(),
-            warnings: vec!["target language is empty".into()],
-        };
-    }
-
-    let translate_provider = if settings.pipeline.translate_provider_id.trim().is_empty() {
-        optimize_provider
-    } else {
-        match resolve_provider(&settings, settings.pipeline.translate_provider_id.trim()) {
-            Some(v) => v,
-            None => {
-                return CloudProcessResult {
-                    final_text: optimized,
-                    stage: "optimized".into(),
-                    warnings: vec!["translate provider not configured or disabled".into()],
+    let translate_id = settings.pipeline.translate_provider_id.trim();
+    if !translate_id.is_empty() {
+        match resolve_provider(&settings, translate_id) {
+            Some(provider) => {
+                let configured = settings.pipeline.target_language.trim();
+                let target: String = if configured.is_empty() || configured == "auto" {
+                    infer_translation_target(&current).into()
+                } else {
+                    configured.into()
                 };
+                let prompt = render_prompt_template(
+                    &settings.pipeline.translate_prompt,
+                    &current,
+                    Some(target.as_str()),
+                );
+                if let Some(cb) = on_stage.as_mut() {
+                    cb("translating");
+                }
+                match call_provider_with_retry(
+                    provider,
+                    "You are a professional translator. Return translated plain text only.",
+                    &prompt,
+                    settings.pipeline.max_retries,
+                ) {
+                    Ok(text) if !text.trim().is_empty() => {
+                        current = text;
+                        stage = "translated".into();
+                    }
+                    Ok(_) => warnings.push("translation returned empty response".into()),
+                    Err(err) => warnings.push(format!("translate failed: {err}")),
+                }
             }
+            None => warnings.push("translate provider not configured or disabled".into()),
         }
-    };
-
-    let translate_user = render_prompt_template(
-        &settings.pipeline.translate_prompt,
-        &optimized,
-        Some(target.as_str()),
-    );
-    if let Some(cb) = on_stage.as_mut() {
-        cb("translating");
     }
-    match call_provider_with_retry(
-        translate_provider,
-        "You are a professional translator. Return translated plain text only.",
-        &translate_user,
-        settings.pipeline.max_retries,
-    ) {
-        Ok(translated) if !translated.trim().is_empty() => CloudProcessResult {
-            final_text: translated,
-            stage: "translated".into(),
-            warnings: Vec::new(),
-        },
-        Ok(_) => CloudProcessResult {
-            final_text: optimized,
-            stage: "optimized".into(),
-            warnings: vec!["translation returned empty response".into()],
-        },
-        Err(err) => CloudProcessResult {
-            final_text: optimized,
-            stage: "optimized".into(),
-            warnings: vec![format!("translate failed: {err}")],
-        },
+
+    CloudProcessResult {
+        final_text: current,
+        stage,
+        warnings,
     }
 }
 
@@ -2148,6 +1844,39 @@ fn transcribe_samples(
     Ok(result.text)
 }
 
+/// Dispatch transcription according to the active ASR settings.
+fn transcribe_with_active_provider(
+    app: &AppHandle,
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<String, String> {
+    let settings = app
+        .state::<AppState>()
+        .asr_settings
+        .lock()
+        .map(|v| v.clone())
+        .unwrap_or_default();
+
+    match settings.provider {
+        AsrProviderKind::LocalSherpa => {
+            let (model, tokens) = model_files_if_ready(app)?;
+            transcribe_samples(&model, &tokens, sample_rate, samples)
+        }
+        kind @ (AsrProviderKind::OpenaiWhisper
+        | AsrProviderKind::GroqWhisper
+        | AsrProviderKind::OpenaiCompatible) => {
+            let base = resolve_base_url(kind, &settings.base_url)?;
+            transcribe_via_openai_compatible(
+                samples,
+                sample_rate,
+                &settings.api_key,
+                &base,
+                &settings.model,
+            )
+        }
+    }
+}
+
 fn emit_native_listening_level(
     app: &AppHandle,
     last_emit: &Arc<Mutex<Instant>>,
@@ -2413,22 +2142,6 @@ fn infer_translation_target(text: &str) -> &'static str {
     }
 }
 
-fn resolve_translation_target(app: &AppHandle, text: &str) -> &'static str {
-    let mode = app
-        .state::<AppState>()
-        .translation_target
-        .lock()
-        .map(|v| *v)
-        .unwrap_or(default_translation_target());
-    match mode {
-        TranslationTargetLang::Auto => infer_translation_target(text),
-        TranslationTargetLang::En => "en",
-        TranslationTargetLang::ZhCn => "zh-CN",
-        TranslationTargetLang::Ja => "ja",
-        TranslationTargetLang::Ko => "ko",
-    }
-}
-
 fn type_text_to_focused_app_impl(app: &AppHandle, text: &str) -> Result<(), String> {
     let output_mode = app
         .state::<AppState>()
@@ -2609,10 +2322,9 @@ fn transcribe_recording(app: AppHandle, id: String, force: Option<bool>) -> Resu
         return Err("recording not found".into());
     }
 
-    let (model, tokens) = model_files_if_ready(&app)?;
     let wav_data = fs::read(&path).map_err(|e| format!("failed to read wav file: {e}"))?;
     let (samples, sample_rate) = decode_wav_samples(&wav_data)?;
-    let text = transcribe_samples(&model, &tokens, sample_rate, &samples)?;
+    let text = transcribe_with_active_provider(&app, &samples, sample_rate)?;
     let text = apply_local_dictionary_terms(&text, &dictionary_words_snapshot(&app));
     put_cached_transcript(&app, &id, &text)?;
     Ok(text)
@@ -2636,9 +2348,8 @@ fn save_recording_and_transcribe(
 
     fs::write(&path, &payload.wav_data).map_err(|e| format!("failed to save wav file: {e}"))?;
 
-    let (model, tokens) = model_files_if_ready(&app)?;
     let (samples, sample_rate) = decode_wav_samples(&payload.wav_data)?;
-    let text = transcribe_samples(&model, &tokens, sample_rate, &samples)?;
+    let text = transcribe_with_active_provider(&app, &samples, sample_rate)?;
     let text = apply_local_dictionary_terms(&text, &dictionary_words_snapshot(&app));
 
     let recording =
@@ -3173,22 +2884,13 @@ fn get_global_shortcuts(app: AppHandle) -> Result<HotkeySettings, String> {
 fn set_global_shortcuts(
     app: AppHandle,
     dictation: String,
-    translation: String,
-    trigger_mode: HotkeyTriggerMode,
     overlay_position: OverlayPosition,
     output_mode: OutputMode,
-    translation_target: TranslationTargetLang,
 ) -> Result<HotkeySettings, String> {
-    let new_config = build_hotkey_config(&dictation, &translation)?;
+    let new_config = build_hotkey_config(&dictation)?;
     let _applied = apply_hotkey_shortcuts(&app, new_config)?;
     {
         let state = app.state::<AppState>();
-        let mut trigger_lock = state
-            .trigger_mode
-            .lock()
-            .map_err(|_| "failed to update trigger mode settings".to_string())?;
-        *trigger_lock = trigger_mode;
-        drop(trigger_lock);
         let mut overlay_lock = state
             .overlay_position
             .lock()
@@ -3200,12 +2902,6 @@ fn set_global_shortcuts(
             .lock()
             .map_err(|_| "failed to update output mode settings".to_string())?;
         *output_lock = output_mode;
-        drop(output_lock);
-        let mut translation_target_lock = state
-            .translation_target
-            .lock()
-            .map_err(|_| "failed to update translation target settings".to_string())?;
-        *translation_target_lock = translation_target;
     }
 
     save_current_hotkey_settings(&app)?;
@@ -3213,31 +2909,18 @@ fn set_global_shortcuts(
 }
 
 #[tauri::command]
-fn set_fn_key_modes(
+fn set_double_tap_enabled(
     app: AppHandle,
-    dictation_enabled: bool,
-    translation_enabled: bool,
+    enabled: bool,
 ) -> Result<HotkeySettings, String> {
-    let (dictation_enabled, translation_enabled) = if cfg!(target_os = "macos") {
-        (dictation_enabled, translation_enabled)
-    } else {
-        (false, false)
-    };
-    let state = app.state::<AppState>();
     {
-        let mut dictation_lock = state
-            .fn_dictation_enabled
+        let state = app.state::<AppState>();
+        let mut lock = state
+            .double_tap_enabled
             .lock()
-            .map_err(|_| "failed to update fn dictation settings".to_string())?;
-        *dictation_lock = dictation_enabled;
-        drop(dictation_lock);
-        let mut translation_lock = state
-            .fn_translation_enabled
-            .lock()
-            .map_err(|_| "failed to update fn translation settings".to_string())?;
-        *translation_lock = translation_enabled;
+            .map_err(|_| "failed to update double-tap settings".to_string())?;
+        *lock = enabled;
     }
-
     save_current_hotkey_settings(&app)?;
     collect_hotkey_settings(&app)
 }
@@ -3356,16 +3039,65 @@ fn test_cloud_provider(
 fn process_text_with_cloud(
     app: AppHandle,
     text: String,
-    translate: bool,
-    target_lang: Option<String>,
 ) -> Result<CloudProcessResult, String> {
-    Ok(run_cloud_pipeline(
-        &app,
-        &text,
-        translate,
-        target_lang,
-        None,
-    ))
+    Ok(run_cloud_pipeline(&app, &text, None))
+}
+
+#[tauri::command]
+fn get_asr_settings(app: AppHandle) -> Result<AsrSettings, String> {
+    app.state::<AppState>()
+        .asr_settings
+        .lock()
+        .map(|v| v.clone())
+        .map_err(|_| "failed to read asr settings".to_string())
+}
+
+#[tauri::command]
+fn set_asr_settings(app: AppHandle, settings: AsrSettings) -> Result<AsrSettings, String> {
+    {
+        let state = app.state::<AppState>();
+        let mut lock = state
+            .asr_settings
+            .lock()
+            .map_err(|_| "failed to update asr settings".to_string())?;
+        *lock = settings.clone();
+    }
+    save_persisted_asr_settings(&app, &settings)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+fn test_asr_provider(app: AppHandle, settings: AsrSettings) -> Result<TestAsrResult, String> {
+    let result = match settings.provider {
+        AsrProviderKind::LocalSherpa => match model_files_if_ready(&app) {
+            Ok(_) => Ok("local model ready".to_string()),
+            Err(err) => Err(err),
+        },
+        kind @ (AsrProviderKind::OpenaiWhisper
+        | AsrProviderKind::GroqWhisper
+        | AsrProviderKind::OpenaiCompatible) => {
+            // Send a tiny dummy audio (0.5 sec of silence at 16kHz) just to validate the API endpoint.
+            let base = match resolve_base_url(kind, &settings.base_url) {
+                Ok(v) => v,
+                Err(err) => {
+                    return Ok(TestAsrResult { ok: false, message: err });
+                }
+            };
+            let silence = vec![0.0f32; 8000];
+            transcribe_via_openai_compatible(
+                &silence,
+                16000,
+                &settings.api_key,
+                &base,
+                &settings.model,
+            )
+            .map(|_| "endpoint reachable".to_string())
+        }
+    };
+    Ok(match result {
+        Ok(message) => TestAsrResult { ok: true, message },
+        Err(err) => TestAsrResult { ok: false, message: err },
+    })
 }
 
 #[tauri::command]
@@ -3547,27 +3279,9 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                     }
 
                     let mono = mix_to_mono(&samples_raw, channels);
-                    let (model, tokens) = match model_files_if_ready(&app_handle) {
-                        Ok(v) => v,
-                        Err(err) => {
-                            let _ = emit_overlay_state(
-                                &app_handle,
-                                "ready",
-                                Some(if current_ui_language(&app_handle) == UiLanguage::En {
-                                    format!("Model not ready: {err}")
-                                } else {
-                                    format!("模型未就绪: {err}")
-                                }),
-                                None,
-                            );
-                            schedule_hide_overlay(&app_handle, 1500);
-                            reset_native_session_to_idle(&app_handle);
-                            continue;
-                        }
-                    };
 
                     let transcribe_started = Instant::now();
-                    let mut text = match transcribe_samples(&model, &tokens, sample_rate, &mono) {
+                    let mut text = match transcribe_with_active_provider(&app_handle, &mono, sample_rate) {
                         Ok(v) => v,
                         Err(err) => {
                             eprintln!(
@@ -3615,12 +3329,6 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                     let cloud_result = run_cloud_pipeline(
                         &app_handle,
                         &text,
-                        action == "toggle-translation",
-                        if action == "toggle-translation" {
-                            Some(resolve_translation_target(&app_handle, &text).to_string())
-                        } else {
-                            None
-                        },
                         Some(&mut on_stage),
                     );
                     if !cloud_result.warnings.is_empty() {
@@ -3640,12 +3348,7 @@ fn spawn_native_recorder_worker(app: &AppHandle) -> Result<(), String> {
                     );
 
                     if let Ok(wav_data) = encode_wav_i16_mono(&mono, sample_rate) {
-                        let prefix = if action == "toggle-translation" {
-                            "translation"
-                        } else {
-                            "recording"
-                        };
-                        let _ = persist_recording_with_text(&app_handle, &wav_data, &text, prefix);
+                        let _ = persist_recording_with_text(&app_handle, &wav_data, &text, "recording");
                     }
 
                     let output = text.trim().to_string();
@@ -3857,49 +3560,31 @@ fn handle_native_hotkey_stop(app: &AppHandle, action: &str) {
 }
 
 fn handle_native_hotkey_event(app: &AppHandle, action: &str, state: &str) {
-    let trigger_mode = app
-        .state::<AppState>()
-        .trigger_mode
-        .lock()
-        .map(|v| *v)
-        .unwrap_or(HotkeyTriggerMode::Tap);
     eprintln!(
-        "[typemore][hotkey] dispatch action={} state={} mode={:?}",
-        action, state, trigger_mode
+        "[typemore][hotkey] dispatch action={} state={}",
+        action, state
     );
-
-    match trigger_mode {
-        HotkeyTriggerMode::Tap => {
-            if state != "pressed" {
-                return;
-            }
-            let is_active = app
-                .state::<AppState>()
-                .native_hotkey_session
-                .lock()
-                .ok()
-                .and_then(|s| s.active_action.clone())
-                .is_some();
-            if is_active {
-                let active = app
-                    .state::<AppState>()
-                    .native_hotkey_session
-                    .lock()
-                    .ok()
-                    .and_then(|s| s.active_action.clone())
-                    .unwrap_or_else(|| action.to_string());
-                handle_native_hotkey_stop(app, &active);
-            } else {
-                handle_native_hotkey_start(app, action);
-            }
-        }
-        HotkeyTriggerMode::LongPress => {
-            if state == "pressed" {
-                handle_native_hotkey_start(app, action);
-            } else if state == "released" {
-                handle_native_hotkey_stop(app, action);
-            }
-        }
+    if state != "pressed" {
+        return;
+    }
+    let is_active = app
+        .state::<AppState>()
+        .native_hotkey_session
+        .lock()
+        .ok()
+        .and_then(|s| s.active_action.clone())
+        .is_some();
+    if is_active {
+        let active = app
+            .state::<AppState>()
+            .native_hotkey_session
+            .lock()
+            .ok()
+            .and_then(|s| s.active_action.clone())
+            .unwrap_or_else(|| action.to_string());
+        handle_native_hotkey_stop(app, &active);
+    } else {
+        handle_native_hotkey_start(app, action);
     }
 }
 
@@ -3921,8 +3606,6 @@ pub fn run() {
                     };
                     let action = if lock.dictation_id.is_some_and(|id| shortcut.id() == id) {
                         "toggle-dictation"
-                    } else if lock.translation_id.is_some_and(|id| shortcut.id() == id) {
-                        "toggle-translation"
                     } else {
                         return;
                     };
@@ -3939,27 +3622,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let mut persisted = load_persisted_hotkeys(app.handle())?;
-            if let Some(saved) = persisted.as_mut() {
-                if cfg!(target_os = "macos")
-                    && is_legacy_default_hotkeys(saved.dictation.trim(), saved.translation.trim())
-                {
-                    eprintln!(
-                        "[typemore] migrate legacy built-in hotkeys to empty defaults (Fn-only)"
-                    );
-                    saved.dictation.clear();
-                    saved.translation.clear();
-                }
-                #[cfg(target_os = "windows")]
-                if is_previous_windows_default_hotkeys(
-                    saved.dictation.trim(),
-                    saved.translation.trim(),
-                ) {
-                    eprintln!("[typemore] migrate windows built-in hotkeys to F8/F9 defaults");
-                    saved.dictation = HOTKEY_TOGGLE_DICTATION.to_string();
-                    saved.translation = HOTKEY_TOGGLE_TRANSLATION.to_string();
-                }
-            }
+            let persisted = load_persisted_hotkeys(app.handle())?;
             let persisted_cloud = load_persisted_cloud_settings(app.handle()).unwrap_or_else(|err| {
                 eprintln!("[typemore] failed to load cloud settings: {}", err);
                 None
@@ -3969,20 +3632,15 @@ pub fn run() {
                     eprintln!("[typemore] failed to load dictionary words settings: {}", err);
                     None
                 });
-            let fn_dictation_enabled = persisted
+            let persisted_asr =
+                load_persisted_asr_settings(app.handle()).unwrap_or_else(|err| {
+                    eprintln!("[typemore] failed to load asr settings: {}", err);
+                    None
+                });
+            let double_tap_enabled = persisted
                 .as_ref()
-                .map(|saved| saved.fn_dictation_enabled)
-                .filter(|_| cfg!(target_os = "macos"))
-                .unwrap_or_else(default_fn_dictation_enabled);
-            let fn_translation_enabled = persisted
-                .as_ref()
-                .map(|saved| saved.fn_translation_enabled)
-                .filter(|_| cfg!(target_os = "macos"))
-                .unwrap_or_else(default_fn_translation_enabled);
-            let trigger_mode = persisted
-                .as_ref()
-                .map(|saved| saved.trigger_mode)
-                .unwrap_or_else(default_trigger_mode);
+                .map(|saved| saved.double_tap_enabled)
+                .unwrap_or_else(default_double_tap_enabled);
             let overlay_position = persisted
                 .as_ref()
                 .map(|saved| saved.overlay_position)
@@ -3991,101 +3649,59 @@ pub fn run() {
                 .as_ref()
                 .map(|saved| saved.output_mode)
                 .unwrap_or_else(default_output_mode);
-            let translation_target = persisted
-                .as_ref()
-                .map(|saved| saved.translation_target)
-                .unwrap_or_else(default_translation_target);
             let ui_language = persisted
                 .as_ref()
                 .map(|saved| saved.ui_language)
                 .unwrap_or_else(default_ui_language);
 
             let desired_cfg = match persisted {
-                Some(saved) => match build_hotkey_config(&saved.dictation, &saved.translation) {
+                Some(saved) => match build_hotkey_config(&saved.dictation) {
                     Ok(cfg) => cfg,
                     Err(err) => {
                         eprintln!(
-                            "[typemore] invalid persisted hotkeys ('{}', '{}'), fallback to default: {}",
-                            saved.dictation, saved.translation, err
+                            "[typemore] invalid persisted hotkey '{}', fallback to default: {}",
+                            saved.dictation, err
                         );
-                        build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?
+                        build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?
                     }
                 },
-                None => build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?,
+                None => build_hotkey_config(HOTKEY_TOGGLE_DICTATION)?,
             };
-            let default_cfg = build_hotkey_config(HOTKEY_TOGGLE_DICTATION, HOTKEY_TOGGLE_TRANSLATION)?;
-            let empty_cfg = build_hotkey_config("", "")?;
+            let empty_cfg = build_hotkey_config("")?;
 
             let active_hotkeys = match apply_hotkey_shortcuts(app.handle(), desired_cfg.clone()) {
                 Ok(cfg) => cfg,
                 Err(err) => {
                     let message = format!(
-                        "[typemore] failed to register hotkeys ('{}', '{}'): {}",
-                        desired_cfg.dictation, desired_cfg.translation, err
+                        "[typemore] failed to register hotkey '{}': {}",
+                        desired_cfg.dictation, err
                     );
                     eprintln!("{message}");
                     append_startup_log(&message);
-
-                    if desired_cfg != default_cfg {
-                        match apply_hotkey_shortcuts(app.handle(), default_cfg.clone()) {
-                            Ok(cfg) => {
-                                let fallback_message = format!(
-                                    "[typemore] fallback to default hotkeys ('{}', '{}')",
-                                    cfg.dictation, cfg.translation
-                                );
-                                eprintln!("{fallback_message}");
-                                append_startup_log(&fallback_message);
-                                cfg
-                            }
-                            Err(default_err) => {
-                                let default_message = format!(
-                                    "[typemore] default hotkeys unavailable ('{}', '{}'): {}",
-                                    default_cfg.dictation, default_cfg.translation, default_err
-                                );
-                                eprintln!("{default_message}");
-                                append_startup_log(&default_message);
-                                let cfg = apply_hotkey_shortcuts(app.handle(), empty_cfg.clone())?;
-                                append_startup_log(
-                                    "[typemore] started without global hotkeys because all configured shortcuts were unavailable",
-                                );
-                                cfg
-                            }
-                        }
-                    } else {
-                        let cfg = apply_hotkey_shortcuts(app.handle(), empty_cfg.clone())?;
-                        append_startup_log(
-                            "[typemore] started without global hotkeys because default shortcuts were unavailable",
-                        );
-                        cfg
-                    }
+                    let cfg = apply_hotkey_shortcuts(app.handle(), empty_cfg.clone())?;
+                    append_startup_log(
+                        "[typemore] started without global hotkeys because configured shortcut was unavailable",
+                    );
+                    cfg
                 }
             };
 
             eprintln!(
-                "[typemore] active hotkeys: dictation='{}', translation='{}'",
-                active_hotkeys.dictation, active_hotkeys.translation
+                "[typemore] active hotkey: dictation='{}'",
+                active_hotkeys.dictation
             );
             append_startup_log(&format!(
-                "[typemore] active hotkeys: dictation='{}', translation='{}'",
-                active_hotkeys.dictation, active_hotkeys.translation
+                "[typemore] active hotkey: dictation='{}'",
+                active_hotkeys.dictation
             ));
-            if let Ok(mut lock) = app.state::<AppState>().fn_dictation_enabled.lock() {
-                *lock = fn_dictation_enabled;
-            }
-            if let Ok(mut lock) = app.state::<AppState>().fn_translation_enabled.lock() {
-                *lock = fn_translation_enabled;
-            }
-            if let Ok(mut lock) = app.state::<AppState>().trigger_mode.lock() {
-                *lock = trigger_mode;
+            if let Ok(mut lock) = app.state::<AppState>().double_tap_enabled.lock() {
+                *lock = double_tap_enabled;
             }
             if let Ok(mut lock) = app.state::<AppState>().overlay_position.lock() {
                 *lock = overlay_position;
             }
             if let Ok(mut lock) = app.state::<AppState>().output_mode.lock() {
                 *lock = output_mode;
-            }
-            if let Ok(mut lock) = app.state::<AppState>().translation_target.lock() {
-                *lock = translation_target;
             }
             if let Ok(mut lock) = app.state::<AppState>().ui_language.lock() {
                 *lock = ui_language;
@@ -4096,6 +3712,9 @@ pub fn run() {
             if let Ok(mut lock) = app.state::<AppState>().dictionary_words.lock() {
                 *lock = persisted_dictionary.unwrap_or_default();
             }
+            if let Ok(mut lock) = app.state::<AppState>().asr_settings.lock() {
+                *lock = persisted_asr.unwrap_or_default();
+            }
             let _ = save_current_hotkey_settings(app.handle());
             if let Ok(current_cloud) = app.state::<AppState>().cloud_settings.lock() {
                 let _ = save_persisted_cloud_settings(app.handle(), &current_cloud.clone());
@@ -4104,17 +3723,16 @@ pub fn run() {
                 let _ =
                     save_persisted_dictionary_words(app.handle(), &current_dictionary.clone());
             }
-            eprintln!(
-                "[typemore] fn keys: dictation={} translation={}",
-                fn_dictation_enabled, fn_translation_enabled
-            );
+            if let Ok(current_asr) = app.state::<AppState>().asr_settings.lock() {
+                let _ = save_persisted_asr_settings(app.handle(), &current_asr.clone());
+            }
+            eprintln!("[typemore] double-tap enabled: {}", double_tap_enabled);
             eprintln!("[typemore] ui language: {:?}", ui_language);
 
-            #[cfg(target_os = "macos")]
-            if let Err(err) = start_macos_fn_key_monitor(app.handle()) {
-                eprintln!("[typemore] failed to start fn monitor: {}", err);
+            if let Err(err) = start_double_tap_modifier_monitor(app.handle()) {
+                eprintln!("[typemore] failed to start double-tap monitor: {}", err);
             } else {
-                eprintln!("[typemore] fn key monitor active");
+                eprintln!("[typemore] double-tap modifier monitor active");
             }
 
             if let Err(err) = spawn_native_recorder_worker(app.handle()) {
@@ -4154,7 +3772,7 @@ pub fn run() {
             type_text_to_focused_app,
             get_global_shortcuts,
             set_global_shortcuts,
-            set_fn_key_modes,
+            set_double_tap_enabled,
             set_ui_language,
             get_cloud_settings,
             set_cloud_settings,
@@ -4162,6 +3780,9 @@ pub fn run() {
             set_dictionary_words,
             test_cloud_provider,
             process_text_with_cloud,
+            get_asr_settings,
+            set_asr_settings,
+            test_asr_provider,
             set_overlay_state,
             set_overlay_level,
             hide_overlay,
