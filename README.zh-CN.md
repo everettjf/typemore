@@ -2,6 +2,25 @@
 
 [English README](./README.md)
 
+> ## ⚠️ 本项目不再维护
+>
+> **TypeMore 不再继续维护。** 自项目启动以来，开源语音输入法生态发展迅速，已经涌现出多款功能完善、社区活跃的替代项目，能够覆盖 TypeMore 的全部使用场景，甚至做得更好。与其重复造轮子，我们建议直接迁移到下面列出的项目之一。
+>
+> 现有版本仍然可以使用，源代码以 Apache-2.0 协议继续保留，但不会再有新功能、新版本或问题修复。感谢每一位试用过 TypeMore 的朋友。
+>
+> ### 推荐替代品
+>
+> | 项目 | 支持平台 | 简介 |
+> | --- | --- | --- |
+> | **[Handy](https://github.com/cjpais/Handy)** | macOS / Windows / Linux | 21k★，MIT 协议，Tauri + Rust（与 TypeMore 同技术栈），本地 Whisper / Parakeet，Homebrew & winget 一键安装 |
+> | **[VoiceInk](https://github.com/Beingpax/VoiceInk)** | 仅 macOS | 4.9k★，GPL-3.0，原生 macOS 应用，支持 Power Mode 按 App 配置，体验打磨细致 |
+> | **[OpenWhispr](https://github.com/OpenWhispr/openwhispr)** | macOS / Windows / Linux | 2.9k★，MIT 协议，本地 + 云端（BYOK），内置 AI 代理与会议转写 |
+> | **[蛐蛐 QuQu](https://github.com/yan5xu/ququ)** | macOS / Windows / Linux | 2.2k★，Apache-2.0，**专为中文优化**，本地 FunASR Paraformer + LLM 智能润色 |
+>
+> 更完整的清单可参考 [awesome-voice-typing](https://github.com/primaprashant/awesome-voice-typing)。
+>
+> ---
+
 TypeMore 是一款同时支持 macOS 和 Windows 的离线语音转文字桌面应用。它会在本地采集你的语音、在设备上完成语音识别，并通过快捷键工作流把结果回填到当前输入位置。
 
 

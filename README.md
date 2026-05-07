@@ -2,6 +2,25 @@
 
 [中文说明](./README.zh-CN.md)
 
+> ## ⚠️ Project No Longer Maintained
+>
+> **TypeMore is no longer actively maintained.** Since this project started, the open-source ecosystem for offline voice dictation has matured rapidly, and there are now several excellent alternatives that cover the same use cases (and more) with larger communities behind them. Rather than duplicate effort, we recommend switching to one of the projects listed below.
+>
+> The existing builds will keep working, the source remains available under Apache-2.0, but no new features, releases, or bug fixes are planned. Thanks to everyone who tried it out.
+>
+> ### Recommended Alternatives
+>
+> | Project | Platforms | Highlights |
+> | --- | --- | --- |
+> | **[Handy](https://github.com/cjpais/Handy)** | macOS / Windows / Linux | 21k★, MIT, Tauri + Rust (same stack as TypeMore), local Whisper / Parakeet, Homebrew & winget |
+> | **[VoiceInk](https://github.com/Beingpax/VoiceInk)** | macOS only | 4.9k★, GPL-3.0, native macOS app, Power Mode per-app config, polished UX |
+> | **[OpenWhispr](https://github.com/OpenWhispr/openwhispr)** | macOS / Windows / Linux | 2.9k★, MIT, local + cloud (BYOK), built-in AI agents and meeting transcription |
+> | **[QuQu (蛐蛐)](https://github.com/yan5xu/ququ)** | macOS / Windows / Linux | 2.2k★, Apache-2.0, optimized for Chinese, local FunASR Paraformer + LLM cleanup |
+>
+> For a broader catalog, see [awesome-voice-typing](https://github.com/primaprashant/awesome-voice-typing).
+>
+> ---
+
 TypeMore is a macOS and Windows desktop app for offline speech-to-text. It captures your voice locally, runs speech recognition on-device, and pastes the result back into the active input with a hotkey workflow.
 
 
