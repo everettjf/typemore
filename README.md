@@ -16,6 +16,7 @@
 > | **[VoiceInk](https://github.com/Beingpax/VoiceInk)** | macOS only | 4.9k★, GPL-3.0, native macOS app, Power Mode per-app config, polished UX |
 > | **[OpenWhispr](https://github.com/OpenWhispr/openwhispr)** | macOS / Windows / Linux | 2.9k★, MIT, local + cloud (BYOK), built-in AI agents and meeting transcription |
 > | **[QuQu (蛐蛐)](https://github.com/yan5xu/ququ)** | macOS / Windows / Linux | 2.2k★, Apache-2.0, optimized for Chinese, local FunASR Paraformer + LLM cleanup |
+> | **[Voxt](https://github.com/hehehai/voxt)** | macOS (Apple Silicon) | Apache-2.0, native Swift, `fn` / `fn+shift` / `fn+control` workflow (closest match to TypeMore), strong Chinese support, local WhisperKit/MLX + optional cloud LLMs |
 >
 > For a broader catalog, see [awesome-voice-typing](https://github.com/primaprashant/awesome-voice-typing).
 >

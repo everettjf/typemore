@@ -16,6 +16,7 @@
 > | **[VoiceInk](https://github.com/Beingpax/VoiceInk)** | 仅 macOS | 4.9k★，GPL-3.0，原生 macOS 应用，支持 Power Mode 按 App 配置，体验打磨细致 |
 > | **[OpenWhispr](https://github.com/OpenWhispr/openwhispr)** | macOS / Windows / Linux | 2.9k★，MIT 协议，本地 + 云端（BYOK），内置 AI 代理与会议转写 |
 > | **[蛐蛐 QuQu](https://github.com/yan5xu/ququ)** | macOS / Windows / Linux | 2.2k★，Apache-2.0，**专为中文优化**，本地 FunASR Paraformer + LLM 智能润色 |
+> | **[Voxt](https://github.com/hehehai/voxt)** | macOS（Apple Silicon） | Apache-2.0，原生 Swift，`fn` / `fn+shift` / `fn+control` 工作流（**与 TypeMore 最接近**），中文支持出色，本地 WhisperKit/MLX + 可选云端 LLM |
 >
 > 更完整的清单可参考 [awesome-voice-typing](https://github.com/primaprashant/awesome-voice-typing)。
 >
